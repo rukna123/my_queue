@@ -42,9 +42,8 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// msgFields is used to extract the uuid and gpu_id from a raw message.
+// msgFields is used to extract gpu_id from a raw message for partitioning.
 type msgFields struct {
-	UUID  string `json:"uuid"`
 	GPUID string `json:"gpu_id"`
 }
 
@@ -52,8 +51,9 @@ type msgFields struct {
 // POST /v1/publish
 // ---------------------------------------------------------------------------
 
-// Publish accepts raw CSV row objects, extracts uuid and gpu_id from each,
-// computes the partition key, and pushes them into the write buffer.
+// Publish accepts raw CSV row objects.  The writer generates a unique msg_uuid
+// for each message (the producer doesn't need to provide one) and extracts
+// gpu_id from the payload to compute the partition key.
 func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
@@ -79,23 +79,13 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "messages["+itoa(i)+"]: "+err.Error())
 			return
 		}
-		if fields.UUID == "" {
-			writeErr(w, http.StatusBadRequest, "messages["+itoa(i)+"]: uuid is required")
-			return
-		}
 		if fields.GPUID == "" {
 			writeErr(w, http.StatusBadRequest, "messages["+itoa(i)+"]: gpu_id is required")
 			return
 		}
 
-		parsed, err := uuid.Parse(fields.UUID)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, "messages["+itoa(i)+"]: invalid uuid: "+err.Error())
-			return
-		}
-
 		msgs = append(msgs, IngestMsg{
-			UUID:      parsed,
+			UUID:      uuid.New(),
 			GPUID:     fields.GPUID,
 			Payload:   raw,
 			Partition: PartitionFor(fields.GPUID, h.totalPartitions),
