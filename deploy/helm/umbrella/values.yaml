@@ -1,0 +1,24 @@
+# Umbrella chart values for prompted Go monorepo
+# Override per-service values below. Each key corresponds to a dependency subchart.
+#
+# Example overrides:
+#   apigw:
+#     replicaCount: 2
+#     image:
+#       tag: "1.0.0"
+#     env:
+#       LOG_LEVEL: debug
+#
+#   mq:
+#     replicaCount: 1
+#     resources:
+#       limits:
+#         memory: 256Mi
+#
+#   streamer:
+#     image:
+#       pullPolicy: Always
+#
+#   collector:
+#     service:
+#       port: 8083

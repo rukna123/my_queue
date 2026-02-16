@@ -1,0 +1,22 @@
+replicaCount: 1
+
+image:
+  repository: prompted-mq
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8081
+
+resources:
+  limits:
+    memory: 128Mi
+    cpu: 100m
+  requests:
+    memory: 64Mi
+    cpu: 50m
+
+env:
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable

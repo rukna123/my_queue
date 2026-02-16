@@ -1,0 +1,5 @@
+apiVersion: v2
+name: prompted-apigw
+description: Helm chart for the prompted apigw service
+version: 0.1.0
+appVersion: "0.1.0"
