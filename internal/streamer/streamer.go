@@ -15,7 +15,8 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Types mirroring the MQ publish API (local to this package)
+// Types mirroring the MQ writer publish API (local to this package).
+// Messages are raw CSV row objects — no msg_uuid wrapper.
 // ---------------------------------------------------------------------------
 
 type telemetryPayload struct {
@@ -31,14 +32,9 @@ type telemetryPayload struct {
 	LabelsRaw  string    `json:"labels_raw"`
 }
 
-type mqMessage struct {
-	MsgUUID string          `json:"msg_uuid"`
-	Payload json.RawMessage `json:"payload"`
-}
-
 type mqPublishRequest struct {
-	Topic    string      `json:"topic"`
-	Messages []mqMessage `json:"messages"`
+	Topic    string            `json:"topic"`
+	Messages []json.RawMessage `json:"messages"`
 }
 
 type mqPublishResponse struct {
@@ -141,12 +137,12 @@ func sender(ctx context.Context, client *httpx.Client, mqBaseURL string, in <-ch
 	}
 }
 
-// publishMessage builds an MQ publish request containing a single message
+// publishMessage builds an MQ publish request containing a single raw CSV row
 // and sends it via the httpx client (which handles retries/backoff internally).
 func publishMessage(ctx context.Context, client *httpx.Client, url string, row TelemetryRow) {
 	start := time.Now()
 
-	payload := telemetryPayload{
+	rowJSON, err := json.Marshal(telemetryPayload{
 		Timestamp:  row.Timestamp,
 		MetricName: row.MetricName,
 		GPUID:      row.GPUID,
@@ -157,20 +153,15 @@ func publishMessage(ctx context.Context, client *httpx.Client, url string, row T
 		Namespace:  row.Namespace,
 		Value:      row.Value,
 		LabelsRaw:  row.LabelsRaw,
-	}
-
-	payloadBytes, err := json.Marshal(payload)
+	})
 	if err != nil {
-		slog.Error("marshal payload", "uuid", row.UUID, "error", err)
+		slog.Error("marshal row", "uuid", row.UUID, "error", err)
 		return
 	}
 
 	reqBody := mqPublishRequest{
-		Topic: "telemetry",
-		Messages: []mqMessage{{
-			MsgUUID: row.UUID,
-			Payload: json.RawMessage(payloadBytes),
-		}},
+		Topic:    "telemetry",
+		Messages: []json.RawMessage{rowJSON},
 	}
 
 	body, err := json.Marshal(reqBody)

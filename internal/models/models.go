@@ -28,17 +28,18 @@ const (
 
 // QueueMessage maps to the queue_messages table.
 type QueueMessage struct {
-	ID         int64        `json:"id"          db:"id"`
-	Topic      string       `json:"topic"       db:"topic"`
-	MsgUUID    uuid.UUID    `json:"msg_uuid"    db:"msg_uuid"`
-	Payload    []byte       `json:"payload"     db:"payload"`
-	State      MessageState `json:"state"       db:"state"`
-	LeasedBy   *string      `json:"leased_by"   db:"leased_by"`
-	LeaseID    *uuid.UUID   `json:"lease_id"    db:"lease_id"`
-	LeaseUntil *time.Time   `json:"lease_until" db:"lease_until"`
-	Attempts   int          `json:"attempts"    db:"attempts"`
-	CreatedAt  time.Time    `json:"created_at"  db:"created_at"`
-	UpdatedAt  time.Time    `json:"updated_at"  db:"updated_at"`
+	ID           int64        `json:"id"            db:"id"`
+	Topic        string       `json:"topic"         db:"topic"`
+	MsgUUID      uuid.UUID    `json:"msg_uuid"      db:"msg_uuid"`
+	Payload      []byte       `json:"payload"       db:"payload"`
+	State        MessageState `json:"state"         db:"state"`
+	LeasedBy     *string      `json:"leased_by"     db:"leased_by"`
+	LeaseID      *uuid.UUID   `json:"lease_id"      db:"lease_id"`
+	LeaseUntil   *time.Time   `json:"lease_until"   db:"lease_until"`
+	Attempts     int          `json:"attempts"      db:"attempts"`
+	PartitionKey int          `json:"partition_key" db:"partition_key"`
+	CreatedAt    time.Time    `json:"created_at"    db:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"    db:"updated_at"`
 }
 
 // ---------------------------------------------------------------------------

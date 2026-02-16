@@ -5,7 +5,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # ---- Variables ---------------------------------------------------------------
-SERVICES     := apigw mq streamer collector
+SERVICES     := apigw mqwriter mqreader streamer collector
 DATABASE_URL ?= postgres://prompted:prompted@localhost:5432/prompted?sslmode=disable
 MIGRATIONS   := ./migrations
 

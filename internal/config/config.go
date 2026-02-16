@@ -17,11 +17,21 @@ type Base struct {
 	DatabaseURL string
 }
 
-// MQ holds configuration for the message-queue service.
-type MQ struct {
+// MQWriter holds configuration for the writer microservice.
+type MQWriter struct {
 	Base
-	BufferSize    int
-	FlushInterval time.Duration
+	PartitionCount int
+	BufferSize     int
+	FlushInterval  time.Duration
+}
+
+// MQReader holds configuration for the reader microservice.
+type MQReader struct {
+	Base
+	PartitionStart int
+	PartitionEnd   int
+	PollInterval   time.Duration
+	PollBatch      int
 }
 
 // Streamer holds configuration for the streamer service.
@@ -55,12 +65,24 @@ func LoadBase(defaultPort int) Base {
 	}
 }
 
-// LoadMQ returns the MQ service configuration.
-func LoadMQ() MQ {
-	return MQ{
-		Base:          LoadBase(8081),
-		BufferSize:    GetEnvInt("MQ_BUFFER_SIZE", 500),
-		FlushInterval: GetEnvDuration("MQ_FLUSH_INTERVAL", 500*time.Millisecond),
+// LoadMQWriter returns the MQ Writer service configuration.
+func LoadMQWriter() MQWriter {
+	return MQWriter{
+		Base:           LoadBase(8084),
+		PartitionCount: GetEnvInt("MQ_PARTITION_COUNT", 256),
+		BufferSize:     GetEnvInt("MQ_BUFFER_SIZE", 500),
+		FlushInterval:  GetEnvDuration("MQ_FLUSH_INTERVAL", 500*time.Millisecond),
+	}
+}
+
+// LoadMQReader returns the MQ Reader service configuration.
+func LoadMQReader() MQReader {
+	return MQReader{
+		Base:           LoadBase(8085),
+		PartitionStart: GetEnvInt("READER_PARTITION_START", 0),
+		PartitionEnd:   GetEnvInt("READER_PARTITION_END", 255),
+		PollInterval:   GetEnvDuration("READER_POLL_INTERVAL", 500*time.Millisecond),
+		PollBatch:      GetEnvInt("READER_POLL_BATCH", 1000),
 	}
 }
 
@@ -71,7 +93,7 @@ func LoadStreamer() Streamer {
 		CSVPath:    GetEnv("STREAMER_CSV_PATH", "samples/telemetry.csv"),
 		IntervalMS: GetEnvInt("STREAMER_INTERVAL_MS", 1000),
 		BatchSize:  GetEnvInt("STREAMER_BATCH_SIZE", 100),
-		MQBaseURL:     GetEnv("MQ_BASE_URL", "http://localhost:8081"),
+		MQBaseURL:     GetEnv("MQ_BASE_URL", "http://localhost:8084"),
 		ChannelBuffer: GetEnvInt("STREAMER_CHANNEL_BUFFER", 16),
 	}
 }
