@@ -66,9 +66,10 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 		"mq_url", cfg.MQBaseURL,
 	)
 
-	// Unbuffered channel: reader blocks until sender receives, which
-	// naturally throttles the pipeline to one in-flight batch.
-	batchCh := make(chan []TelemetryRow)
+	// Buffered channel: the reader never blocks waiting for the sender to
+	// finish an HTTP call. The MQ service handles backpressure internally
+	// via its write buffer.
+	batchCh := make(chan []TelemetryRow, cfg.ChannelBuffer)
 
 	// Sender goroutine – owns the HTTP client.
 	doneCh := make(chan struct{})

@@ -20,15 +20,18 @@ type Base struct {
 // MQ holds configuration for the message-queue service.
 type MQ struct {
 	Base
+	BufferSize    int
+	FlushInterval time.Duration
 }
 
 // Streamer holds configuration for the streamer service.
 type Streamer struct {
 	Base
-	CSVPath    string
-	IntervalMS int
-	BatchSize  int
-	MQBaseURL  string
+	CSVPath       string
+	IntervalMS    int
+	BatchSize     int
+	MQBaseURL     string
+	ChannelBuffer int
 }
 
 // Collector holds configuration for the collector service.
@@ -54,7 +57,11 @@ func LoadBase(defaultPort int) Base {
 
 // LoadMQ returns the MQ service configuration.
 func LoadMQ() MQ {
-	return MQ{Base: LoadBase(8081)}
+	return MQ{
+		Base:          LoadBase(8081),
+		BufferSize:    GetEnvInt("MQ_BUFFER_SIZE", 500),
+		FlushInterval: GetEnvDuration("MQ_FLUSH_INTERVAL", 500*time.Millisecond),
+	}
 }
 
 // LoadStreamer returns the Streamer service configuration.
@@ -64,7 +71,8 @@ func LoadStreamer() Streamer {
 		CSVPath:    GetEnv("STREAMER_CSV_PATH", "samples/telemetry.csv"),
 		IntervalMS: GetEnvInt("STREAMER_INTERVAL_MS", 1000),
 		BatchSize:  GetEnvInt("STREAMER_BATCH_SIZE", 100),
-		MQBaseURL:  GetEnv("MQ_BASE_URL", "http://localhost:8081"),
+		MQBaseURL:     GetEnv("MQ_BASE_URL", "http://localhost:8081"),
+		ChannelBuffer: GetEnvInt("STREAMER_CHANNEL_BUFFER", 16),
 	}
 }
 

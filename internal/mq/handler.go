@@ -12,12 +12,15 @@ import (
 
 // Handler exposes the MQ HTTP endpoints.
 type Handler struct {
-	store *Store
+	store  *Store
+	buffer *WriteBuffer
 }
 
-// NewHandler creates a Handler backed by the given Store.
-func NewHandler(store *Store) *Handler {
-	return &Handler{store: store}
+// NewHandler creates a Handler backed by the given Store and WriteBuffer.
+// Publish requests flow through the WriteBuffer (batched async writes);
+// Lease and Ack go directly to the Store for strong consistency.
+func NewHandler(store *Store, buffer *WriteBuffer) *Handler {
+	return &Handler{store: store, buffer: buffer}
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +101,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	accepted, dupes, err := h.store.Publish(r.Context(), req.Topic, req.Messages)
+	accepted, dupes, err := h.buffer.Submit(r.Context(), req.Topic, req.Messages)
 	if err != nil {
 		slog.Error("publish failed", "topic", req.Topic, "error", err)
 		writeErr(w, http.StatusInternalServerError, "publish failed")

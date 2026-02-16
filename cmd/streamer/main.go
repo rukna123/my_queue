@@ -29,7 +29,9 @@ func main() {
 		Level: cfg.SlogLevel(),
 	})))
 
-	client := httpx.NewClient(10*time.Second, 3)
+	// Low retry count (1) so the sender goroutine doesn't stall the pipeline.
+	// Backpressure is handled by the MQ's write buffer, not the streamer.
+	client := httpx.NewClient(10*time.Second, 1)
 
 	// Root context cancelled on SIGINT/SIGTERM.
 	ctx, cancel := context.WithCancel(context.Background())

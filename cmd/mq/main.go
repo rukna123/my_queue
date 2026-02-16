@@ -40,7 +40,16 @@ func main() {
 	defer pool.Close()
 
 	store := mq.NewStore(pool)
-	h := mq.NewHandler(store)
+	buf := mq.NewWriteBuffer(store, cfg.BufferSize, cfg.FlushInterval)
+
+	// Start the write buffer's flusher goroutine.
+	bufDone := make(chan struct{})
+	go func() {
+		defer close(bufDone)
+		buf.Run()
+	}()
+
+	h := mq.NewHandler(store, buf)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -67,10 +76,10 @@ func main() {
 		r.Post("/ack", h.Ack)
 	})
 
-	serve(cfg.Base, r)
+	serve(cfg.Base, r, buf, bufDone)
 }
 
-func serve(cfg config.Base, handler http.Handler) {
+func serve(cfg config.Base, handler http.Handler, buf *mq.WriteBuffer, bufDone <-chan struct{}) {
 	srv := &http.Server{
 		Addr:         cfg.Addr(),
 		Handler:      handler,
@@ -95,11 +104,18 @@ func serve(cfg config.Base, handler http.Handler) {
 		slog.Error("server error", "error", err)
 	}
 
+	// Gracefully shut down the HTTP server first (stop accepting new requests).
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "error", err)
 	}
+
+	// Close the write buffer and wait for it to flush remaining messages.
+	slog.Info("draining write buffer")
+	buf.Close()
+	<-bufDone
+	slog.Info("write buffer drained")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
