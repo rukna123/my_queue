@@ -1,5 +1,6 @@
-// Service mq is a lightweight message-queue broker. It exposes HTTP
-// endpoints for producing/consuming messages and provides health checks.
+// Service mq is a lightweight message-queue broker backed by PostgreSQL.
+// It exposes HTTP endpoints for publishing, leasing, and acknowledging
+// messages and provides health/readiness probes.
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/prompted/prompted/internal/config"
 	"github.com/prompted/prompted/internal/db"
 	"github.com/prompted/prompted/internal/models"
+	"github.com/prompted/prompted/internal/mq"
 )
 
 func main() {
@@ -37,16 +39,19 @@ func main() {
 	}
 	defer pool.Close()
 
+	store := mq.NewStore(pool)
+	h := mq.NewHandler(store)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 
+	// Health probes
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ok", Service: "mq"})
 	})
-
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Healthy(r.Context(), pool); err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, models.HealthResponse{Status: "unavailable", Service: "mq"})
@@ -55,14 +60,11 @@ func main() {
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ready", Service: "mq"})
 	})
 
-	// Placeholder routes
-	r.Route("/topics", func(r chi.Router) {
-		r.Post("/", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
-		})
-		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, []string{})
-		})
+	// MQ API
+	r.Route("/v1", func(r chi.Router) {
+		r.Post("/publish", h.Publish)
+		r.Post("/lease", h.Lease)
+		r.Post("/ack", h.Ack)
 	})
 
 	serve(cfg.Base, r)
