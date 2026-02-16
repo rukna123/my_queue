@@ -4,7 +4,7 @@ Go mono-repo with four micro-services: **apigw**, **mq**, **streamer**, and **co
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.26+
 - Docker & Docker Compose
 - [golang-migrate CLI](https://github.com/golang-migrate/migrate/tree/master/cmd/migrate) (for migrations)
 - [golangci-lint](https://golangci-lint.run/) (optional, for linting)

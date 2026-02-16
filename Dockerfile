@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile – builds any cmd/* binary.
 # Usage: docker build --build-arg SERVICE=apigw -t prompted-apigw .
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 ARG SERVICE
 
