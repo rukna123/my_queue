@@ -8,13 +8,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // TelemetryRow is a single row parsed from the telemetry CSV.
-// The original timestamp from the CSV is stored but overwritten with
-// time.Now().UTC() at publish time.
+// Timestamp is set to time.Now().UTC() when the row is processed for
+// streaming (in readLoop), not when it is originally read from disk.
 type TelemetryRow struct {
-	Timestamp  string  // original CSV value (overwritten at publish time)
+	Timestamp  time.Time // set to time.Now().UTC() when the row is processed
 	MetricName string
 	GPUID      string
 	UUID       string
@@ -63,8 +64,12 @@ func ReadCSV(path string) ([]TelemetryRow, error) {
 
 		val, _ := strconv.ParseFloat(strings.TrimSpace(record[8]), 64)
 
+		// Timestamp is intentionally left as zero value here;
+		// it is stamped with time.Now().UTC() in readLoop when
+		// the row is processed into a batch.
+		_ = strings.TrimSpace(record[0]) // original CSV timestamp (unused)
+
 		rows = append(rows, TelemetryRow{
-			Timestamp:  strings.TrimSpace(record[0]),
 			MetricName: strings.TrimSpace(record[1]),
 			GPUID:      strings.TrimSpace(record[2]),
 			UUID:       strings.TrimSpace(record[3]),

@@ -101,9 +101,14 @@ func readLoop(ctx context.Context, rows []TelemetryRow, batchSize, intervalMS in
 				end = len(rows)
 			}
 
-			// Copy the slice so the sender owns its data.
+			// Copy the slice so the sender owns its data, and stamp
+			// each row's Timestamp to the current time.
+			now := time.Now().UTC()
 			batch := make([]TelemetryRow, end-i)
 			copy(batch, rows[i:end])
+			for j := range batch {
+				batch[j].Timestamp = now
+			}
 
 			select {
 			case out <- batch:
@@ -143,7 +148,7 @@ func publishBatch(ctx context.Context, client *httpx.Client, url string, rows []
 	msgs := make([]mqMessage, 0, len(rows))
 	for _, row := range rows {
 		payload := telemetryPayload{
-			Timestamp:  time.Now().UTC(), // overwrite with current time
+			Timestamp:  row.Timestamp, // stamped in readLoop when the row was processed
 			MetricName: row.MetricName,
 			GPUID:      row.GPUID,
 			UUID:       row.UUID,
