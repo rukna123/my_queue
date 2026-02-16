@@ -1,5 +1,4 @@
--- 001_init.down.sql – Teardown bootstrap schema
+-- 001_init.down.sql – Teardown core schema
 
-DROP TABLE IF EXISTS streams;
-DROP TABLE IF EXISTS events;
-DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS telemetry;
+DROP TABLE IF EXISTS queue_messages;

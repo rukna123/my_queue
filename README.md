@@ -87,6 +87,57 @@ All services read configuration from environment variables. See `.env.example` f
 | `UPSTREAM_TIMEOUT`  | `10s`                                                                | apigw upstream timeout |
 | `COLLECT_INTERVAL`  | `30s`                                                                | collector tick rate  |
 
+## Database Schema
+
+Migrations live in `migrations/` and are managed by [golang-migrate](https://github.com/golang-migrate/migrate).
+
+```bash
+make migrate-up      # apply all pending migrations
+make migrate-down    # roll back the last migration
+make migrate-create NAME=add_foo   # scaffold a new migration pair
+```
+
+### `queue_messages`
+
+Backing table for the custom MQ broker. Each row is a message with a lifecycle state.
+
+| Column       | Type          | Notes                                      |
+|--------------|---------------|--------------------------------------------|
+| `id`         | `bigserial`   | PK                                         |
+| `topic`      | `text`        | not null (e.g. `telemetry`)                |
+| `msg_uuid`   | `uuid`        | not null, unique per topic (dedup key)     |
+| `payload`    | `jsonb`       | not null                                   |
+| `state`      | `text`        | `ready` / `in_flight` / `acked`            |
+| `leased_by`  | `text`        | nullable – consumer identifier             |
+| `lease_id`   | `uuid`        | nullable – lease correlation ID            |
+| `lease_until`| `timestamptz` | nullable – lease expiry                    |
+| `attempts`   | `int`         | default 0                                  |
+| `created_at` | `timestamptz` | default `now()`                            |
+| `updated_at` | `timestamptz` | default `now()`                            |
+
+**Indexes**: `UNIQUE(topic, msg_uuid)`, `(topic, state, lease_until)`, `(lease_id)`.
+
+### `telemetry`
+
+Persisted GPU telemetry entries written by the streamer.
+
+| Column        | Type               | Notes                                 |
+|---------------|--------------------|---------------------------------------|
+| `id`          | `bigserial`        | PK                                    |
+| `uuid`        | `uuid`             | not null, unique (dedup key)          |
+| `gpu_id`      | `text`             | not null                              |
+| `metric_name` | `text`             | not null                              |
+| `timestamp`   | `timestamptz`      | not null – `processed_at` from streamer |
+| `model_name`  | `text`             | nullable                              |
+| `container`   | `text`             | nullable                              |
+| `pod`         | `text`             | nullable                              |
+| `namespace`   | `text`             | nullable                              |
+| `value`       | `double precision` | nullable                              |
+| `labels_raw`  | `text`             | nullable                              |
+| `ingested_at` | `timestamptz`      | default `now()`                       |
+
+**Indexes**: `UNIQUE(uuid)`, `(gpu_id, timestamp)`.
+
 ## Health Endpoints
 
 Every service exposes:
