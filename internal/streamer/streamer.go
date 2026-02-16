@@ -61,7 +61,6 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 	slog.Info("csv loaded",
 		"rows", len(rows),
 		"path", cfg.CSVPath,
-		"batch_size", cfg.BatchSize,
 		"interval_ms", cfg.IntervalMS,
 		"mq_url", cfg.MQBaseURL,
 	)
@@ -69,20 +68,20 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 	// Buffered channel: the reader never blocks waiting for the sender to
 	// finish an HTTP call. The MQ service handles backpressure internally
 	// via its write buffer.
-	batchCh := make(chan []TelemetryRow, cfg.ChannelBuffer)
+	msgCh := make(chan TelemetryRow, cfg.ChannelBuffer)
 
 	// Sender goroutine – owns the HTTP client.
 	doneCh := make(chan struct{})
 	go func() {
 		defer close(doneCh)
-		sender(ctx, client, cfg.MQBaseURL, batchCh)
+		sender(ctx, client, cfg.MQBaseURL, msgCh)
 	}()
 
 	// Reader loop – owns the CSV data and timing, runs on caller goroutine.
-	readLoop(ctx, rows, cfg.BatchSize, cfg.IntervalMS, cfg.CSVPath, batchCh)
+	readLoop(ctx, rows, cfg.IntervalMS, cfg.CSVPath, msgCh)
 
 	// readLoop returned (ctx cancelled) – close channel so sender drains.
-	close(batchCh)
+	close(msgCh)
 	<-doneCh
 }
 
@@ -90,46 +89,34 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 // Reader goroutine (runs on the calling goroutine of Run)
 // ---------------------------------------------------------------------------
 
-// readLoop iterates over rows continuously, slicing them into batches and
-// pushing each batch onto out. It sleeps IntervalMS between batches.
+// readLoop iterates over rows one at a time, sending each as a single message
+// on out. It sleeps IntervalMS between messages.
 //
-// For every batch it:
-//  1. Stamps time.Now().UTC() on the original rows slice.
+// For every row it:
+//  1. Stamps time.Now().UTC() on the original rows slice entry.
 //  2. Writes the full CSV back to disk so the file reflects the last-processed
 //     timestamp for every row.
-//  3. Copies the batch and sends it through the channel to the sender.
-func readLoop(ctx context.Context, rows []TelemetryRow, batchSize, intervalMS int, csvPath string, out chan<- []TelemetryRow) {
+//  3. Copies the row and sends it through the channel to the sender.
+func readLoop(ctx context.Context, rows []TelemetryRow, intervalMS int, csvPath string, out chan<- TelemetryRow) {
 	interval := time.Duration(intervalMS) * time.Millisecond
 
 	for {
-		for i := 0; i < len(rows); i += batchSize {
-			end := i + batchSize
-			if end > len(rows) {
-				end = len(rows)
-			}
+		for i := range rows {
+			rows[i].Timestamp = time.Now().UTC()
 
-			// Stamp the processing time on the original rows.
-			now := time.Now().UTC()
-			for j := i; j < end; j++ {
-				rows[j].Timestamp = now
-			}
-
-			// Persist the updated timestamps to the CSV on disk.
 			if err := WriteCSV(csvPath, rows); err != nil {
 				slog.Error("failed to write CSV back to disk", "error", err)
 			}
 
-			// Copy the slice so the sender owns its data.
-			batch := make([]TelemetryRow, end-i)
-			copy(batch, rows[i:end])
+			// Copy the row so the sender owns its data.
+			row := rows[i]
 
 			select {
-			case out <- batch:
+			case out <- row:
 			case <-ctx.Done():
 				return
 			}
 
-			// Delay between batches.
 			select {
 			case <-time.After(interval):
 			case <-ctx.Done():
@@ -144,54 +131,46 @@ func readLoop(ctx context.Context, rows []TelemetryRow, batchSize, intervalMS in
 // Sender goroutine
 // ---------------------------------------------------------------------------
 
-// sender receives batches from in and publishes them to the MQ.
-func sender(ctx context.Context, client *httpx.Client, mqBaseURL string, in <-chan []TelemetryRow) {
+// sender receives individual rows from in and publishes each as a single
+// message to the MQ.
+func sender(ctx context.Context, client *httpx.Client, mqBaseURL string, in <-chan TelemetryRow) {
 	publishURL := mqBaseURL + "/v1/publish"
 
-	for batch := range in {
-		publishBatch(ctx, client, publishURL, batch)
+	for row := range in {
+		publishMessage(ctx, client, publishURL, row)
 	}
 }
 
-// publishBatch builds the MQ publish request and sends it via the httpx
-// client (which handles retries/backoff internally).
-func publishBatch(ctx context.Context, client *httpx.Client, url string, rows []TelemetryRow) {
+// publishMessage builds an MQ publish request containing a single message
+// and sends it via the httpx client (which handles retries/backoff internally).
+func publishMessage(ctx context.Context, client *httpx.Client, url string, row TelemetryRow) {
 	start := time.Now()
 
-	msgs := make([]mqMessage, 0, len(rows))
-	for _, row := range rows {
-		payload := telemetryPayload{
-			Timestamp:  row.Timestamp, // stamped in readLoop when the row was processed
-			MetricName: row.MetricName,
-			GPUID:      row.GPUID,
-			UUID:       row.UUID,
-			ModelName:  row.ModelName,
-			Container:  row.Container,
-			Pod:        row.Pod,
-			Namespace:  row.Namespace,
-			Value:      row.Value,
-			LabelsRaw:  row.LabelsRaw,
-		}
-
-		payloadBytes, err := json.Marshal(payload)
-		if err != nil {
-			slog.Error("marshal payload", "uuid", row.UUID, "error", err)
-			continue
-		}
-
-		msgs = append(msgs, mqMessage{
-			MsgUUID: row.UUID,
-			Payload: json.RawMessage(payloadBytes),
-		})
+	payload := telemetryPayload{
+		Timestamp:  row.Timestamp,
+		MetricName: row.MetricName,
+		GPUID:      row.GPUID,
+		UUID:       row.UUID,
+		ModelName:  row.ModelName,
+		Container:  row.Container,
+		Pod:        row.Pod,
+		Namespace:  row.Namespace,
+		Value:      row.Value,
+		LabelsRaw:  row.LabelsRaw,
 	}
 
-	if len(msgs) == 0 {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("marshal payload", "uuid", row.UUID, "error", err)
 		return
 	}
 
 	reqBody := mqPublishRequest{
-		Topic:    "telemetry",
-		Messages: msgs,
+		Topic: "telemetry",
+		Messages: []mqMessage{{
+			MsgUUID: row.UUID,
+			Payload: json.RawMessage(payloadBytes),
+		}},
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -211,7 +190,7 @@ func publishBatch(ctx context.Context, client *httpx.Client, url string, rows []
 	if err != nil {
 		slog.Error("publish to MQ failed",
 			"error", err,
-			"batch_size", len(msgs),
+			"uuid", row.UUID,
 			"latency_ms", time.Since(start).Milliseconds(),
 		)
 		return
@@ -224,7 +203,7 @@ func publishBatch(ctx context.Context, client *httpx.Client, url string, rows []
 	if resp.StatusCode != http.StatusOK {
 		slog.Error("MQ returned non-200",
 			"status", resp.StatusCode,
-			"batch_size", len(msgs),
+			"uuid", row.UUID,
 		)
 		return
 	}
@@ -235,10 +214,10 @@ func publishBatch(ctx context.Context, client *httpx.Client, url string, rows []
 		return
 	}
 
-	slog.Info("batch published",
+	slog.Info("message published",
+		"uuid", row.UUID,
 		"accepted", result.Accepted,
 		"duplicates", result.Duplicates,
-		"batch_size", len(msgs),
 		"latency_ms", time.Since(start).Milliseconds(),
 	)
 }
