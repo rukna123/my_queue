@@ -48,8 +48,11 @@ prompted/
 │   ├── config/         # Env-based configuration loader
 │   ├── db/             # Database connection & migration helpers
 │   ├── httpx/          # HTTP client wrapper with retries/timeouts
-│   └── models/         # Shared domain structs
+│   ├── models/         # Shared domain structs
+│   ├── mq/             # MQ store, handlers, SQL queries
+│   └── streamer/       # CSV reader + streaming pipeline
 ├── migrations/         # SQL migration files
+├── samples/            # Sample data files (telemetry CSV)
 ├── deploy/helm/        # Helm charts (per-service + umbrella)
 ├── docker-compose.yaml # Local dev (PostgreSQL)
 ├── Dockerfile          # Multi-stage build (all services)
@@ -85,6 +88,10 @@ All services read configuration from environment variables. See `.env.example` f
 | `LOG_LEVEL`         | `info`                                                               | `debug/info/warn/error` |
 | `DATABASE_URL`      | `postgres://prompted:prompted@localhost:5432/prompted?sslmode=disable` | PostgreSQL DSN       |
 | `UPSTREAM_TIMEOUT`  | `10s`                                                                | apigw upstream timeout |
+| `STREAMER_CSV_PATH` | `samples/telemetry.csv`                                              | Path to telemetry CSV |
+| `STREAMER_INTERVAL_MS` | `1000`                                                            | Delay (ms) between batches |
+| `STREAMER_BATCH_SIZE` | `100`                                                              | Rows per MQ publish call |
+| `MQ_BASE_URL`       | `http://localhost:8081`                                              | MQ service base URL  |
 | `COLLECT_INTERVAL`  | `30s`                                                                | collector tick rate  |
 
 ## Database Schema
@@ -138,12 +145,39 @@ Persisted GPU telemetry entries written by the streamer.
 
 **Indexes**: `UNIQUE(uuid)`, `(gpu_id, timestamp)`.
 
+## Running the Streamer
+
+The streamer reads a CSV file and publishes rows to the MQ service. To run it locally:
+
+```bash
+# Terminal 1 – start Postgres and run migrations
+make up && make migrate-up
+
+# Terminal 2 – start the MQ service
+make run-mq
+
+# Terminal 3 – start the streamer (uses samples/telemetry.csv by default)
+make run-streamer
+```
+
+The streamer will loop continuously over the CSV, publishing batches to `POST /v1/publish` on the MQ. Since the MQ deduplicates on `(topic, msg_uuid)`, the first iteration inserts all rows and subsequent iterations report them as duplicates.
+
+You can customise the streamer via environment variables:
+
+```bash
+STREAMER_CSV_PATH=./my-data.csv \
+STREAMER_INTERVAL_MS=500 \
+STREAMER_BATCH_SIZE=50 \
+MQ_BASE_URL=http://localhost:8081 \
+  make run-streamer
+```
+
 ## Health Endpoints
 
 Every service exposes:
 
 - `GET /healthz` – liveness probe (always returns 200 if the process is up)
-- `GET /readyz` – readiness probe (returns 200 only when the database is reachable)
+- `GET /readyz` – readiness probe (checks downstream dependency: DB for mq/apigw/collector, MQ reachability for streamer)
 
 ## Logging
 

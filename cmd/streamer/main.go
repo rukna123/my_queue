@@ -1,5 +1,6 @@
-// Service streamer streams data from the message queue to downstream
-// consumers. It provides health/readiness endpoints.
+// Service streamer reads telemetry rows from a CSV file and publishes them
+// to the MQ service in batches. It loops continuously, overwriting the
+// timestamp with time.Now().UTC() on each publish.
 package main
 
 import (
@@ -16,8 +17,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/prompted/prompted/internal/config"
-	"github.com/prompted/prompted/internal/db"
+	"github.com/prompted/prompted/internal/httpx"
 	"github.com/prompted/prompted/internal/models"
+	"github.com/prompted/prompted/internal/streamer"
 )
 
 func main() {
@@ -27,59 +29,50 @@ func main() {
 		Level: cfg.SlogLevel(),
 	})))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	client := httpx.NewClient(10*time.Second, 3)
+
+	// Root context cancelled on SIGINT/SIGTERM.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
-	if err != nil {
-		slog.Error("failed to connect to database", "error", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
+	// Start the streaming pipeline in a background goroutine.
+	go streamer.Run(ctx, cfg, client)
 
+	// HTTP server for health probes.
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(middleware.Timeout(10 * time.Second))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ok", Service: "streamer"})
 	})
 
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		if err := db.Healthy(r.Context(), pool); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, models.HealthResponse{Status: "unavailable", Service: "streamer"})
+		if err := streamer.Healthy(r.Context(), client, cfg.MQBaseURL); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable,
+				models.HealthResponse{Status: "unavailable", Service: "streamer"})
 			return
 		}
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ready", Service: "streamer"})
 	})
 
-	// Placeholder routes
-	r.Route("/streams", func(r chi.Router) {
-		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, []string{})
-		})
-	})
-
-	serve(cfg.Base, r)
-}
-
-func serve(cfg config.Base, handler http.Handler) {
 	srv := &http.Server{
 		Addr:         cfg.Addr(),
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:      r,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
 
+	// Start HTTP server.
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("streamer listening", "addr", srv.Addr)
 		errCh <- srv.ListenAndServe()
 	}()
 
+	// Wait for signal or server error.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -90,10 +83,13 @@ func serve(cfg config.Base, handler http.Handler) {
 		slog.Error("server error", "error", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("shutdown error", "error", err)
+	// Cancel the streaming context and shut down HTTP server.
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("http shutdown error", "error", err)
 	}
 }
 
