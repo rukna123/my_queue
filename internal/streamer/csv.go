@@ -12,10 +12,11 @@ import (
 )
 
 // TelemetryRow is a single row parsed from the telemetry CSV.
-// Timestamp is set to time.Now().UTC() when the row is processed for
-// streaming (in readLoop), not when it is originally read from disk.
+// When a row is processed for streaming, its Timestamp is set to
+// time.Now().UTC() and the entire CSV is rewritten to disk so the file
+// always reflects the last-processed time for every row.
 type TelemetryRow struct {
-	Timestamp  time.Time // set to time.Now().UTC() when the row is processed
+	Timestamp  time.Time
 	MetricName string
 	GPUID      string
 	UUID       string
@@ -25,6 +26,13 @@ type TelemetryRow struct {
 	Namespace  string
 	Value      float64
 	LabelsRaw  string
+}
+
+// csvHeader is written as the first row of every CSV we produce.
+var csvHeader = []string{
+	"timestamp", "metric_name", "gpu_id", "uuid",
+	"model_name", "container", "pod", "namespace",
+	"value", "labels_raw",
 }
 
 // ReadCSV loads and parses a telemetry CSV file.
@@ -64,12 +72,12 @@ func ReadCSV(path string) ([]TelemetryRow, error) {
 
 		val, _ := strconv.ParseFloat(strings.TrimSpace(record[8]), 64)
 
-		// Timestamp is intentionally left as zero value here;
-		// it is stamped with time.Now().UTC() in readLoop when
-		// the row is processed into a batch.
-		_ = strings.TrimSpace(record[0]) // original CSV timestamp (unused)
+		// Parse the timestamp from CSV. If it cannot be parsed (e.g. first
+		// run with placeholder data), it stays as the zero time.
+		ts, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(record[0]))
 
 		rows = append(rows, TelemetryRow{
+			Timestamp:  ts,
 			MetricName: strings.TrimSpace(record[1]),
 			GPUID:      strings.TrimSpace(record[2]),
 			UUID:       strings.TrimSpace(record[3]),
@@ -86,4 +94,62 @@ func ReadCSV(path string) ([]TelemetryRow, error) {
 		return nil, fmt.Errorf("csv %q contains no data rows", path)
 	}
 	return rows, nil
+}
+
+// WriteCSV atomically rewrites the CSV file with the current state of rows.
+// It writes to a temporary file first, then renames it over the original to
+// avoid partial writes on crash.
+func WriteCSV(path string, rows []TelemetryRow) error {
+	tmp := path + ".tmp"
+
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("create temp csv: %w", err)
+	}
+
+	w := csv.NewWriter(f)
+
+	if err := w.Write(csvHeader); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write header: %w", err)
+	}
+
+	for _, row := range rows {
+		ts := ""
+		if !row.Timestamp.IsZero() {
+			ts = row.Timestamp.Format(time.RFC3339Nano)
+		}
+
+		record := []string{
+			ts,
+			row.MetricName,
+			row.GPUID,
+			row.UUID,
+			row.ModelName,
+			row.Container,
+			row.Pod,
+			row.Namespace,
+			strconv.FormatFloat(row.Value, 'f', -1, 64),
+			row.LabelsRaw,
+		}
+		if err := w.Write(record); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("write row: %w", err)
+		}
+	}
+
+	w.Flush()
+	if err := w.Error(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("csv flush: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp csv: %w", err)
+	}
+
+	return os.Rename(tmp, path)
 }

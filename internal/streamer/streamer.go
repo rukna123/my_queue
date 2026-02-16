@@ -78,7 +78,7 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 	}()
 
 	// Reader loop – owns the CSV data and timing, runs on caller goroutine.
-	readLoop(ctx, rows, cfg.BatchSize, cfg.IntervalMS, batchCh)
+	readLoop(ctx, rows, cfg.BatchSize, cfg.IntervalMS, cfg.CSVPath, batchCh)
 
 	// readLoop returned (ctx cancelled) – close channel so sender drains.
 	close(batchCh)
@@ -91,7 +91,13 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 
 // readLoop iterates over rows continuously, slicing them into batches and
 // pushing each batch onto out. It sleeps IntervalMS between batches.
-func readLoop(ctx context.Context, rows []TelemetryRow, batchSize, intervalMS int, out chan<- []TelemetryRow) {
+//
+// For every batch it:
+//  1. Stamps time.Now().UTC() on the original rows slice.
+//  2. Writes the full CSV back to disk so the file reflects the last-processed
+//     timestamp for every row.
+//  3. Copies the batch and sends it through the channel to the sender.
+func readLoop(ctx context.Context, rows []TelemetryRow, batchSize, intervalMS int, csvPath string, out chan<- []TelemetryRow) {
 	interval := time.Duration(intervalMS) * time.Millisecond
 
 	for {
@@ -101,14 +107,20 @@ func readLoop(ctx context.Context, rows []TelemetryRow, batchSize, intervalMS in
 				end = len(rows)
 			}
 
-			// Copy the slice so the sender owns its data, and stamp
-			// each row's Timestamp to the current time.
+			// Stamp the processing time on the original rows.
 			now := time.Now().UTC()
+			for j := i; j < end; j++ {
+				rows[j].Timestamp = now
+			}
+
+			// Persist the updated timestamps to the CSV on disk.
+			if err := WriteCSV(csvPath, rows); err != nil {
+				slog.Error("failed to write CSV back to disk", "error", err)
+			}
+
+			// Copy the slice so the sender owns its data.
 			batch := make([]TelemetryRow, end-i)
 			copy(batch, rows[i:end])
-			for j := range batch {
-				batch[j].Timestamp = now
-			}
 
 			select {
 			case out <- batch:
