@@ -25,10 +25,17 @@ type leaseRequest struct {
 	LeaseSeconds int    `json:"lease_seconds"`
 }
 
+// LeaseMessage is a single message in the lease response, carrying the
+// mqwriter-generated msg_uuid alongside the raw payload.
+type LeaseMessage struct {
+	MsgUUID string          `json:"msg_uuid"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 // LeaseResponse is the result of a lease call to the MQ reader.
 type LeaseResponse struct {
-	LeaseID  string            `json:"lease_id"`
-	Messages []json.RawMessage `json:"messages"`
+	LeaseID  string         `json:"lease_id"`
+	Messages []LeaseMessage `json:"messages"`
 }
 
 type ackRequest struct {
@@ -191,19 +198,23 @@ func processOnce(ctx context.Context, cfg config.Collector, store Persister, mq 
 		"count", len(leaseResp.Messages),
 	)
 
-	// 2. Parse payloads into telemetry rows.
+	// 2. Parse payloads into telemetry rows, using msg_uuid as the dedup key.
 	rows := make([]TelemetryRow, 0, len(leaseResp.Messages))
-	for i, raw := range leaseResp.Messages {
+	for i, msg := range leaseResp.Messages {
 		var row TelemetryRow
-		if err := json.Unmarshal(raw, &row); err != nil {
+		if err := json.Unmarshal(msg.Payload, &row); err != nil {
 			slog.Error("parse message payload",
 				"index", i,
+				"msg_uuid", msg.MsgUUID,
 				"lease_id", leaseResp.LeaseID,
 				"error", err,
 			)
 			// Skip unparseable messages but continue with the rest.
 			continue
 		}
+		// Override the payload's uuid with the mqwriter-generated msg_uuid.
+		// This is the single authoritative dedup key for the telemetry table.
+		row.UUID = msg.MsgUUID
 		rows = append(rows, row)
 	}
 

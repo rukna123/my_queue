@@ -69,16 +69,21 @@ func testCfg() config.Collector {
 	}
 }
 
-func sampleMessages() []json.RawMessage {
+func sampleMessages() []collector.LeaseMessage {
 	row := collector.TelemetryRow{
-		UUID:       "550e8400-e29b-41d4-a716-446655440001",
+		UUID:       "csv-template-uuid",
 		GPUID:      "GPU-test",
 		MetricName: "gpu_utilization",
 		Timestamp:  time.Now().UTC(),
 		Value:      85.0,
 	}
 	b, _ := json.Marshal(row)
-	return []json.RawMessage{b}
+	return []collector.LeaseMessage{
+		{
+			MsgUUID: "550e8400-e29b-41d4-a716-446655440001",
+			Payload: b,
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +144,7 @@ func TestCollector_NoAckWhenNoMessages(t *testing.T) {
 	mq := &mockMQ{
 		leaseResp: &collector.LeaseResponse{
 			LeaseID:  "lease-empty",
-			Messages: []json.RawMessage{},
+			Messages: []collector.LeaseMessage{},
 		},
 	}
 	store := &mockPersister{}

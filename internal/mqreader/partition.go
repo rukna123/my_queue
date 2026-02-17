@@ -9,8 +9,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// LeasedMsg is returned to clients from a lease call — just the raw payload.
+// LeasedMsg is returned to clients from a lease call.
+// It carries the mqwriter-generated msg_uuid so consumers can use it as
+// the authoritative dedup key (e.g. for the telemetry table).
 type LeasedMsg struct {
+	MsgUUID string          `json:"msg_uuid"`
 	Payload json.RawMessage `json:"payload"`
 }
 
@@ -193,7 +196,7 @@ func (p *Partition) Run(ctx context.Context) {
 			c.LeaseID = leaseID
 			c.LeaseUntil = leaseUntil
 			c.Attempts++
-			result[i] = LeasedMsg{Payload: c.Payload}
+			result[i] = LeasedMsg{MsgUUID: c.MsgUUID, Payload: c.Payload}
 		}
 
 		slog.Info("partition leased",

@@ -29,10 +29,16 @@ type LeaseRequest struct {
 	LeaseSeconds int    `json:"lease_seconds"`
 }
 
+// LeaseMessageResponse is a single message in the lease response.
+type LeaseMessageResponse struct {
+	MsgUUID string          `json:"msg_uuid"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 // LeaseResponse is returned by POST /v1/lease.
 type LeaseResponse struct {
-	LeaseID  string            `json:"lease_id"`
-	Messages []json.RawMessage `json:"messages"`
+	LeaseID  string                 `json:"lease_id"`
+	Messages []LeaseMessageResponse `json:"messages"`
 }
 
 // AckRequest is the body of POST /v1/ack.
@@ -94,23 +100,26 @@ func (h *Handler) Lease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Unwrap payloads: return raw JSON objects, not wrapped in LeasedMsg.
-	rawMsgs := make([]json.RawMessage, len(result.Messages))
+	// Build response with msg_uuid + payload for each message.
+	msgs := make([]LeaseMessageResponse, len(result.Messages))
 	for i, m := range result.Messages {
-		rawMsgs[i] = m.Payload
+		msgs[i] = LeaseMessageResponse{
+			MsgUUID: m.MsgUUID,
+			Payload: m.Payload,
+		}
 	}
 
 	slog.Info("leased",
 		"topic", req.Topic,
 		"consumer_id", req.ConsumerID,
-		"leased", len(rawMsgs),
+		"leased", len(msgs),
 		"requested_max", req.Max,
 		"latency_ms", time.Since(start).Milliseconds(),
 	)
 
 	writeJSON(w, http.StatusOK, LeaseResponse{
 		LeaseID:  result.LeaseID,
-		Messages: rawMsgs,
+		Messages: msgs,
 	})
 }
 

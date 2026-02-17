@@ -139,6 +139,8 @@ func sender(ctx context.Context, client *httpx.Client, mqBaseURL string, in <-ch
 
 // publishMessage builds an MQ publish request containing a single raw CSV row
 // and sends it via the httpx client (which handles retries/backoff internally).
+// The payload's uuid field is the original CSV value; the mqwriter generates
+// the authoritative msg_uuid for queue-level and telemetry-level dedup.
 func publishMessage(ctx context.Context, client *httpx.Client, url string, row TelemetryRow) {
 	start := time.Now()
 
