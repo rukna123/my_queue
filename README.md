@@ -6,34 +6,78 @@ Go mono-repo with five micro-services: **apigw**, **mqwriter**, **mqreader**, **
 
 - Go 1.26+
 - Docker & Docker Compose
-- [golang-migrate CLI](https://github.com/golang-migrate/migrate/tree/master/cmd/migrate) (for migrations)
+- [golang-migrate CLI](https://github.com/golang-migrate/migrate/tree/master/cmd/migrate) (for host-mode migrations)
 - [golangci-lint](https://golangci-lint.run/) (optional, for linting)
 
-## Quick Start
+## Quick Start (Docker Compose — recommended)
+
+One command brings up the entire stack: Postgres, migrations, and all five services.
+
+```bash
+make up
+```
+
+Wait ~15 seconds for data to flow through the pipeline, then verify:
+
+```bash
+# List GPUs
+curl http://localhost:8080/api/v1/gpus
+
+# Telemetry for a specific GPU
+curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry'
+
+# Telemetry with time window
+curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
+
+# Health check all services
+make verify
+```
+
+To stop:
+
+```bash
+make down          # stop containers (preserves DB data)
+make down-clean    # stop containers AND wipe DB volume
+```
+
+### What happens on `make up`
+
+1. **Postgres** starts and becomes healthy.
+2. **migrate** runs all SQL migrations, then exits.
+3. **mqwriter** (:8084) and **mqreader** (:8085) start once migrations complete.
+4. **streamer** (:8082) starts once mqwriter is healthy — reads `samples/telemetry.csv`, stamps `time.Now().UTC()` on each row, publishes to mqwriter every second.
+5. **collector** (:8083) starts once mqreader is healthy — leases messages, persists to `telemetry` table.
+6. **apigw** (:8080) starts once migrations complete — serves REST API and Swagger UI.
+
+No manual seeding step is needed. The streamer continuously loops over the CSV, generating fresh telemetry data with unique message IDs.
+
+### Useful commands
+
+```bash
+make logs            # tail all service logs
+make logs-mqwriter   # tail a single service
+make ps              # show running containers
+make verify          # quick health + data check
+```
+
+## Quick Start (Host Mode — without Docker)
 
 ```bash
 # 1. Copy env file and adjust if needed
 cp .env.example .env
 
-# 2. Start PostgreSQL
-make up
+# 2. Start PostgreSQL (via compose or install locally)
+docker compose up -d postgres
 
 # 3. Run migrations
 make migrate-up
 
 # 4. Run services (each in its own terminal)
-make run-mqwriter    # :8084  – receives publishes, buffers, flushes to Postgres
-make run-mqreader    # :8085  – serves lease/ack from in-memory partition
-make run-streamer    # :8082  – reads CSV, streams telemetry to mqwriter
-make run-collector   # :8083  – leases from mqreader, persists to telemetry table
-make run-apigw       # :8080  – API gateway
-```
-
-Verify a service is running:
-
-```bash
-curl http://localhost:8084/healthz
-# {"status":"ok","service":"mqwriter"}
+make run-mqwriter    # :8084
+make run-mqreader    # :8085
+make run-streamer    # :8082
+make run-collector   # :8083
+make run-apigw       # :8080
 ```
 
 ## Architecture
@@ -77,29 +121,68 @@ prompted/
 ├── migrations/         # SQL migration files
 ├── samples/            # Sample data files (telemetry CSV)
 ├── deploy/helm/        # Helm charts (per-service + umbrella)
-├── docker-compose.yaml # Local dev (PostgreSQL)
+├── docker-compose.yaml # Full local dev stack (all services)
 ├── Dockerfile          # Multi-stage build (all services)
-├── Makefile            # Build, test, lint, run, migrate
+├── Makefile            # Build, test, lint, run, migrate, up/down
 └── .env.example        # Environment variable template
 ```
 
 ## Make Targets
 
-| Target              | Description                              |
-|---------------------|------------------------------------------|
-| `make build`        | Build all binaries into `./bin/`         |
-| `make build-mqwriter` | Build a single service                 |
-| `make run-mqwriter` | Run a single service via `go run`        |
-| `make test`         | Run all tests with race detector         |
-| `make test-cover`   | Run tests with HTML coverage report      |
-| `make lint`         | Run golangci-lint                        |
-| `make fmt`          | Format code (gofmt + goimports)          |
-| `make migrate-up`   | Apply pending migrations                 |
-| `make migrate-down` | Roll back one migration                  |
-| `make up`           | Start docker-compose (PostgreSQL)        |
-| `make down`         | Stop docker-compose                      |
-| `make docker-build` | Build Docker images for all services     |
-| `make swagger`      | Generate OpenAPI spec into `docs/swagger/`|
+| Target              | Description                                    |
+|---------------------|------------------------------------------------|
+| `make up`           | Build & start full stack (Postgres + services) |
+| `make down`         | Stop all containers                            |
+| `make down-clean`   | Stop containers + wipe DB volume               |
+| `make logs`         | Tail logs from all services                    |
+| `make logs-mqwriter`| Tail logs from a single service                |
+| `make ps`           | Show running containers                        |
+| `make verify`       | Health check + quick data verification         |
+| `make seed`         | Show seeding instructions (auto via streamer)  |
+| `make build`        | Build all binaries into `./bin/`               |
+| `make build-apigw`  | Build a single service                         |
+| `make run-apigw`    | Run a single service on the host               |
+| `make test`         | Run all tests with race detector               |
+| `make test-cover`   | Run tests with HTML coverage report            |
+| `make lint`         | Run golangci-lint                              |
+| `make fmt`          | Format code (gofmt + goimports)                |
+| `make migrate-up`   | Apply pending migrations (host Postgres)       |
+| `make migrate-down` | Roll back one migration                        |
+| `make docker-build` | Build Docker images (no compose)               |
+| `make swagger`      | Generate OpenAPI spec into `docs/swagger/`     |
+
+## Verifying the Pipeline
+
+After `make up`, wait ~15 seconds, then run:
+
+```bash
+# 1. Check all services are healthy
+make verify
+
+# 2. List GPUs (should show 3 GPU IDs from the sample CSV)
+curl -s http://localhost:8080/api/v1/gpus | python3 -m json.tool
+# {
+#     "gpus": [
+#         {"id": "GPU-0a1b2c3d"},
+#         {"id": "GPU-5e6f7a8b"},
+#         {"id": "GPU-c9d0e1f2"}
+#     ]
+# }
+
+# 3. Get telemetry for a GPU
+curl -s 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry' | python3 -m json.tool
+# Returns entries with recent timestamps (streamer stamps time.Now())
+
+# 4. Filter by time window (RFC3339)
+curl -s 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2026-02-15T00:00:00Z&end_time=2026-02-16T00:00:00Z' | python3 -m json.tool
+
+# 5. Check mqwriter buffer metrics
+curl -s http://localhost:8084/metrics/buffer
+# {"buffer_utilization": 0.0}
+
+# 6. Swagger UI
+open http://localhost:8080/swagger/index.html
+```
 
 ## Configuration
 
@@ -127,45 +210,6 @@ All services read configuration from environment variables. See `.env.example` f
 | `POLL_INTERVAL_MS` | `1000` | collector | Polling frequency |
 | `MQ_BASE_URL` | `http://localhost:8085` | collector | MQReader URL |
 
-## Running the Collector
-
-The collector leases messages from the MQ reader, persists them to the `telemetry` table, and acknowledges the lease.
-
-```bash
-# Terminal 1 – Postgres + migrations
-make up && make migrate-up
-
-# Terminal 2 – MQ writer (receives from streamer)
-make run-mqwriter
-
-# Terminal 3 – MQ reader (serves lease/ack to collector)
-make run-mqreader
-
-# Terminal 4 – Streamer (publishes telemetry to writer)
-make run-streamer
-
-# Terminal 5 – Collector (consumes from reader, persists to telemetry table)
-make run-collector
-```
-
-The collector polls `POST /v1/lease` on the mqreader. For each leased batch:
-
-1. Parses each message payload into a telemetry struct.
-2. Inserts into the `telemetry` table with `ON CONFLICT (uuid) DO NOTHING` for idempotency.
-3. If all inserts succeed, calls `POST /v1/ack` to remove the messages from the queue.
-4. If persistence fails, the lease is **not** acknowledged — messages will be redelivered after the lease expires.
-
-You can customise via environment:
-
-```bash
-COLLECTOR_ID=collector-0 \
-LEASE_MAX=50 \
-LEASE_SECONDS=15 \
-POLL_INTERVAL_MS=500 \
-MQ_BASE_URL=http://localhost:8085 \
-  make run-collector
-```
-
 ## API Gateway
 
 The API gateway exposes GPU telemetry data over REST. Start it after the full pipeline is running:
@@ -180,7 +224,7 @@ make run-apigw   # http://localhost:8080
 
 ```bash
 curl http://localhost:8080/api/v1/gpus
-# {"gpus":[{"id":"GPU-0a1b2c3d"},{"id":"GPU-5e6f7a8b"}]}
+# {"gpus":[{"id":"GPU-0a1b2c3d"},{"id":"GPU-5e6f7a8b"},{"id":"GPU-c9d0e1f2"}]}
 ```
 
 **`GET /api/v1/gpus/{id}/telemetry`** — telemetry entries for a GPU, ordered by timestamp ascending.
@@ -188,7 +232,7 @@ curl http://localhost:8080/api/v1/gpus
 Optional query params `start_time` and `end_time` (RFC3339, inclusive):
 
 ```bash
-curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2025-01-01T00:00:00Z&end_time=2026-01-01T00:00:00Z'
+curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
 ```
 
 ### Swagger UI
@@ -248,6 +292,8 @@ Persisted GPU telemetry entries written by the collector.
 | `metric_name` | `text` | not null |
 | `timestamp` | `timestamptz` | not null |
 | `model_name` | `text` | nullable |
+| `device` | `text` | nullable |
+| `hostname` | `text` | nullable |
 | `container` | `text` | nullable |
 | `pod` | `text` | nullable |
 | `namespace` | `text` | nullable |

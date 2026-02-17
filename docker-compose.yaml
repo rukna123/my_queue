@@ -1,8 +1,14 @@
-# docker-compose.yaml – local development environment
-# Start with:  docker-compose up -d
-# This gives you a PostgreSQL instance. Run services on the host via `make run-*`.
+# docker-compose.yaml – full local development stack
+# Start: make up (or docker compose up -d --build)
+# Stop:  make down
+
+x-db-url: &db-url
+  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable
 
 services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -16,9 +22,144 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U prompted"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: migrate/migrate:v4.17.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command:
+      [
+        "-path", "/migrations",
+        "-database", "postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable",
+        "up",
+      ]
+
+  # ---------------------------------------------------------------------------
+  # MQ Writer  –  receives publishes, buffers, flushes to Postgres
+  # ---------------------------------------------------------------------------
+  mqwriter:
+    build:
+      context: .
+      args:
+        SERVICE: mqwriter
+    ports:
+      - "8084:8084"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *db-url
+      PORT: "8084"
+      LOG_LEVEL: info
+      MQ_PARTITION_COUNT: "256"
+      MQ_BUFFER_SIZE: "500"
+      MQ_FLUSH_INTERVAL: "500ms"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8084/readyz"]
       interval: 5s
-      timeout: 5s
-      retries: 5
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # MQ Reader  –  serves lease/ack from in-memory partition store
+  # ---------------------------------------------------------------------------
+  mqreader:
+    build:
+      context: .
+      args:
+        SERVICE: mqreader
+    ports:
+      - "8085:8085"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *db-url
+      PORT: "8085"
+      LOG_LEVEL: info
+      READER_PARTITION_START: "0"
+      READER_PARTITION_END: "255"
+      READER_POLL_INTERVAL: "500ms"
+      READER_POLL_BATCH: "1000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8085/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Streamer  –  reads CSV, stamps time, publishes to mqwriter
+  # ---------------------------------------------------------------------------
+  streamer:
+    build:
+      context: .
+      args:
+        SERVICE: streamer
+    ports:
+      - "8082:8082"
+    depends_on:
+      mqwriter:
+        condition: service_healthy
+    environment:
+      PORT: "8082"
+      LOG_LEVEL: info
+      MQ_BASE_URL: http://mqwriter:8084
+      STREAMER_CSV_PATH: /data/telemetry.csv
+      STREAMER_INTERVAL_MS: "1000"
+      STREAMER_CHANNEL_BUFFER: "16"
+    volumes:
+      - ./samples:/data
+
+  # ---------------------------------------------------------------------------
+  # Collector  –  leases from mqreader, persists to telemetry table
+  # ---------------------------------------------------------------------------
+  collector:
+    build:
+      context: .
+      args:
+        SERVICE: collector
+    ports:
+      - "8083:8083"
+    depends_on:
+      mqreader:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *db-url
+      PORT: "8083"
+      LOG_LEVEL: info
+      MQ_BASE_URL: http://mqreader:8085
+      COLLECTOR_ID: collector-0
+      LEASE_SECONDS: "30"
+      LEASE_MAX: "100"
+      POLL_INTERVAL_MS: "1000"
+
+  # ---------------------------------------------------------------------------
+  # API Gateway  –  public REST API + Swagger UI
+  # ---------------------------------------------------------------------------
+  apigw:
+    build:
+      context: .
+      args:
+        SERVICE: apigw
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *db-url
+      PORT: "8080"
+      LOG_LEVEL: info
 
 volumes:
   pgdata:

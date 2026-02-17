@@ -1,7 +1,6 @@
 // Service mqwriter is the write-side of the message queue.  It receives
 // published messages via HTTP, buffers them in memory, and flushes to
-// PostgreSQL asynchronously.  It exposes a buffer utilization metric
-// endpoint for Kubernetes HPA-based autoscaling.
+// PostgreSQL asynchronously.
 package main
 
 import (
