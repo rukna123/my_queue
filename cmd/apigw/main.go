@@ -1,6 +1,11 @@
 // Service apigw is the API gateway – the public entry-point for external
-// clients.  It routes requests to internal services and provides
-// health / readiness endpoints.
+// clients.  It exposes GPU telemetry queries and Swagger documentation.
+//
+//	@title			Prompted API
+//	@version		1.0
+//	@description	GPU telemetry API gateway.
+//	@host			localhost:8080
+//	@BasePath		/
 package main
 
 import (
@@ -15,10 +20,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
+	"github.com/prompted/prompted/internal/apigw"
 	"github.com/prompted/prompted/internal/config"
 	"github.com/prompted/prompted/internal/db"
 	"github.com/prompted/prompted/internal/models"
+
+	_ "github.com/prompted/prompted/docs/swagger" // generated swagger docs
 )
 
 func main() {
@@ -28,15 +37,18 @@ func main() {
 		Level: cfg.SlogLevel(),
 	})))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	connCtx, connCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer connCancel()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	pool, err := db.Connect(connCtx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	store := apigw.NewStore(pool)
+	handler := apigw.NewHandler(store)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -44,24 +56,27 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 
+	// Health probes.
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ok", Service: "apigw"})
 	})
-
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Healthy(r.Context(), pool); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, models.HealthResponse{Status: "unavailable", Service: "apigw"})
+			writeJSON(w, http.StatusServiceUnavailable,
+				models.HealthResponse{Status: "unavailable", Service: "apigw"})
 			return
 		}
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ready", Service: "apigw"})
 	})
 
-	// Placeholder API routes
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, map[string]string{"message": "welcome to prompted API"})
-		})
-	})
+	// API routes.
+	r.Get("/api/v1/gpus", handler.ListGPUs)
+	r.Get("/api/v1/gpus/{id}/telemetry", handler.GetTelemetry)
+
+	// Swagger UI.
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	serve(cfg.Base, r)
 }
@@ -75,14 +90,12 @@ func serve(cfg config.Base, handler http.Handler) {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start server in a goroutine.
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("apigw listening", "addr", srv.Addr)
 		errCh <- srv.ListenAndServe()
 	}()
 
-	// Wait for interrupt or server error.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 

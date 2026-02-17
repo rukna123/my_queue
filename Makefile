@@ -79,8 +79,8 @@ docker-build: ## Build Docker images for all services
 
 # ---- Swagger -----------------------------------------------------------------
 .PHONY: swagger
-swagger: ## Generate swagger docs (requires swag CLI)
-	swag init -g cmd/apigw/main.go -o docs/swagger
+swagger: ## Generate OpenAPI spec into docs/swagger/
+	go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/apigw/main.go -o docs/swagger --parseDependency --parseInternal
 
 # ---- Help --------------------------------------------------------------------
 .PHONY: help

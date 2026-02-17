@@ -50,7 +50,8 @@ curl http://localhost:8084/healthz
 - **MQWriter** – receives raw telemetry JSON, generates `msg_uuid`, computes `partition_key = FNV-1a(gpu_id) % 256`, buffers in memory, flushes to Postgres asynchronously. Exposes `GET /metrics/buffer` for HPA autoscaling.
 - **MQReader** – each pod owns a range of 256 virtual partitions, polls Postgres for its partition's rows into memory, serves `POST /v1/lease` and `POST /v1/ack` from the in-memory store. No contention between pods.
 - **Streamer** – reads a CSV file, stamps `time.Now().UTC()` on each row, writes timestamps back to disk, publishes each row as a single message to mqwriter.
-- **Collector** – polls mqreader for leased messages, parses payloads, inserts into the `telemetry` table with `ON CONFLICT (uuid) DO NOTHING` for idempotency, acks the lease only on full success.
+- **Collector** – polls mqreader for leased messages, parses payloads, inserts into the `telemetry` table with `ON CONFLICT (uuid) DO NOTHING` for idempotency, acks the lease only on full success. Uses the mqwriter-generated `msg_uuid` as the dedup key.
+- **API Gateway** – public-facing HTTP API serving GPU telemetry queries. Exposes `GET /api/v1/gpus` and `GET /api/v1/gpus/{id}/telemetry` (with optional RFC3339 time filters). Auto-generated OpenAPI docs served at `/swagger/`.
 
 ## Project Structure
 
@@ -70,7 +71,9 @@ prompted/
 │   ├── mqwriter/       # Writer store, buffer, handler, SQL
 │   ├── mqreader/       # Reader store, partition, handler, SQL
 │   ├── streamer/       # CSV reader + streaming pipeline
-│   └── collector/      # Collector store, loop, SQL, tests
+│   ├── collector/      # Collector store, loop, SQL, tests
+│   └── apigw/          # API gateway store, handler, SQL, tests
+├── docs/swagger/       # Generated OpenAPI spec + Swagger UI assets
 ├── migrations/         # SQL migration files
 ├── samples/            # Sample data files (telemetry CSV)
 ├── deploy/helm/        # Helm charts (per-service + umbrella)
@@ -96,6 +99,7 @@ prompted/
 | `make up`           | Start docker-compose (PostgreSQL)        |
 | `make down`         | Stop docker-compose                      |
 | `make docker-build` | Build Docker images for all services     |
+| `make swagger`      | Generate OpenAPI spec into `docs/swagger/`|
 
 ## Configuration
 
@@ -162,6 +166,45 @@ MQ_BASE_URL=http://localhost:8085 \
   make run-collector
 ```
 
+## API Gateway
+
+The API gateway exposes GPU telemetry data over REST. Start it after the full pipeline is running:
+
+```bash
+make run-apigw   # http://localhost:8080
+```
+
+### Endpoints
+
+**`GET /api/v1/gpus`** — list distinct GPU IDs in the telemetry table.
+
+```bash
+curl http://localhost:8080/api/v1/gpus
+# {"gpus":[{"id":"GPU-0a1b2c3d"},{"id":"GPU-5e6f7a8b"}]}
+```
+
+**`GET /api/v1/gpus/{id}/telemetry`** — telemetry entries for a GPU, ordered by timestamp ascending.
+
+Optional query params `start_time` and `end_time` (RFC3339, inclusive):
+
+```bash
+curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2025-01-01T00:00:00Z&end_time=2026-01-01T00:00:00Z'
+```
+
+### Swagger UI
+
+Auto-generated OpenAPI docs are served at:
+
+```
+http://localhost:8080/swagger/index.html
+```
+
+To regenerate after changing handler annotations:
+
+```bash
+make swagger
+```
+
 ## Database Schema
 
 Migrations live in `migrations/` and are managed by [golang-migrate](https://github.com/golang-migrate/migrate).
@@ -200,7 +243,7 @@ Persisted GPU telemetry entries written by the collector.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `bigserial` | PK |
-| `uuid` | `uuid` | not null, unique (dedup key from CSV) |
+| `uuid` | `uuid` | not null, unique (dedup key = mqwriter's `msg_uuid`) |
 | `gpu_id` | `text` | not null |
 | `metric_name` | `text` | not null |
 | `timestamp` | `timestamptz` | not null |

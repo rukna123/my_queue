@@ -1,0 +1,122 @@
+basePath: /
+definitions:
+  internal_apigw.GPUItem:
+    properties:
+      id:
+        example: GPU-0a1b2c3d
+        type: string
+    type: object
+  internal_apigw.GPUsResponse:
+    properties:
+      gpus:
+        items:
+          $ref: '#/definitions/internal_apigw.GPUItem'
+        type: array
+    type: object
+  internal_apigw.TelemetryEntry:
+    properties:
+      container:
+        type: string
+      gpu_id:
+        type: string
+      ingested_at:
+        type: string
+      labels_raw:
+        type: string
+      metric_name:
+        type: string
+      model_name:
+        type: string
+      namespace:
+        type: string
+      pod:
+        type: string
+      timestamp:
+        type: string
+      uuid:
+        type: string
+      value:
+        type: number
+    type: object
+  internal_apigw.TelemetryResponse:
+    properties:
+      entries:
+        items:
+          $ref: '#/definitions/internal_apigw.TelemetryEntry'
+        type: array
+      gpu_id:
+        example: GPU-0a1b2c3d
+        type: string
+    type: object
+  internal_apigw.errorResponse:
+    properties:
+      error:
+        example: invalid start_time
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: GPU telemetry API gateway.
+  title: Prompted API
+  version: "1.0"
+paths:
+  /api/v1/gpus:
+    get:
+      description: Returns the list of distinct gpu_id values present in the telemetry
+        table.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_apigw.GPUsResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_apigw.errorResponse'
+      summary: List distinct GPUs
+      tags:
+      - gpus
+  /api/v1/gpus/{id}/telemetry:
+    get:
+      description: |-
+        Returns telemetry entries for the specified GPU ordered by timestamp ascending.
+        Optional query params start_time and end_time filter the time window (RFC3339).
+      parameters:
+      - description: GPU ID
+        example: GPU-0a1b2c3d
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Start time (RFC3339)
+        example: "2024-01-01T00:00:00Z"
+        in: query
+        name: start_time
+        type: string
+      - description: End time (RFC3339)
+        example: "2030-12-31T23:59:59Z"
+        in: query
+        name: end_time
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_apigw.TelemetryResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_apigw.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_apigw.errorResponse'
+      summary: Get GPU telemetry
+      tags:
+      - gpus
+swagger: "2.0"

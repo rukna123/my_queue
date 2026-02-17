@@ -1,0 +1,179 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "GPU telemetry API gateway.",
+        "title": "Prompted API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/",
+    "paths": {
+        "/api/v1/gpus": {
+            "get": {
+                "description": "Returns the list of distinct gpu_id values present in the telemetry table.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gpus"
+                ],
+                "summary": "List distinct GPUs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_apigw.GPUsResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_apigw.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/gpus/{id}/telemetry": {
+            "get": {
+                "description": "Returns telemetry entries for the specified GPU ordered by timestamp ascending.\nOptional query params start_time and end_time filter the time window (RFC3339).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gpus"
+                ],
+                "summary": "Get GPU telemetry",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "GPU-0a1b2c3d",
+                        "description": "GPU ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "example": "2024-01-01T00:00:00Z",
+                        "description": "Start time (RFC3339)",
+                        "name": "start_time",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "example": "2030-12-31T23:59:59Z",
+                        "description": "End time (RFC3339)",
+                        "name": "end_time",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_apigw.TelemetryResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_apigw.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_apigw.errorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "internal_apigw.GPUItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "example": "GPU-0a1b2c3d"
+                }
+            }
+        },
+        "internal_apigw.GPUsResponse": {
+            "type": "object",
+            "properties": {
+                "gpus": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_apigw.GPUItem"
+                    }
+                }
+            }
+        },
+        "internal_apigw.TelemetryEntry": {
+            "type": "object",
+            "properties": {
+                "container": {
+                    "type": "string"
+                },
+                "gpu_id": {
+                    "type": "string"
+                },
+                "ingested_at": {
+                    "type": "string"
+                },
+                "labels_raw": {
+                    "type": "string"
+                },
+                "metric_name": {
+                    "type": "string"
+                },
+                "model_name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "pod": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "uuid": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "number"
+                }
+            }
+        },
+        "internal_apigw.TelemetryResponse": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_apigw.TelemetryEntry"
+                    }
+                },
+                "gpu_id": {
+                    "type": "string",
+                    "example": "GPU-0a1b2c3d"
+                }
+            }
+        },
+        "internal_apigw.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "example": "invalid start_time"
+                }
+            }
+        }
+    }
+}
