@@ -1,5 +1,5 @@
-// Service collector periodically collects events from external sources
-// and stores them in the database.
+// Service collector leases messages from the MQ reader, persists telemetry
+// data to PostgreSQL, and acknowledges the lease on success.
 package main
 
 import (
@@ -15,8 +15,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/prompted/prompted/internal/collector"
 	"github.com/prompted/prompted/internal/config"
 	"github.com/prompted/prompted/internal/db"
+	"github.com/prompted/prompted/internal/httpx"
 	"github.com/prompted/prompted/internal/models"
 )
 
@@ -27,21 +29,26 @@ func main() {
 		Level: cfg.SlogLevel(),
 	})))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	connCtx, connCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer connCancel()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	pool, err := db.Connect(connCtx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	// Start background collector loop via an owner goroutine.
+	store := collector.NewStore(pool)
+	client := httpx.NewClient(10*time.Second, 2)
+	mqClient := collector.NewMQClient(client, cfg.MQBaseURL)
+
+	// Start the collector loop in an owner goroutine.
 	collectCtx, collectCancel := context.WithCancel(context.Background())
 	defer collectCancel()
-	go collectLoop(collectCtx, cfg.CollectInterval)
+	go collector.Run(collectCtx, cfg, store, mqClient)
 
+	// HTTP server for health probes.
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -53,45 +60,24 @@ func main() {
 	})
 
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		// Check DB.
 		if err := db.Healthy(r.Context(), pool); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, models.HealthResponse{Status: "unavailable", Service: "collector"})
+			writeJSON(w, http.StatusServiceUnavailable,
+				models.HealthResponse{Status: "unavailable", Service: "collector"})
+			return
+		}
+		// Check MQ reader reachability.
+		if err := collector.Healthy(r.Context(), client, cfg.MQBaseURL); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable,
+				models.HealthResponse{Status: "unavailable", Service: "collector"})
 			return
 		}
 		writeJSON(w, http.StatusOK, models.HealthResponse{Status: "ready", Service: "collector"})
 	})
 
-	// Placeholder routes
-	r.Route("/events", func(r chi.Router) {
-		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, []string{})
-		})
-	})
-
-	serve(cfg.Base, r)
-}
-
-// collectLoop is the owner goroutine that periodically runs collection.
-// It owns its own state and communicates via context cancellation.
-func collectLoop(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("collector loop stopped")
-			return
-		case <-ticker.C:
-			slog.Info("collecting events (placeholder)")
-			// TODO: implement actual collection logic
-		}
-	}
-}
-
-func serve(cfg config.Base, handler http.Handler) {
 	srv := &http.Server{
 		Addr:         cfg.Addr(),
-		Handler:      handler,
+		Handler:      r,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -113,9 +99,11 @@ func serve(cfg config.Base, handler http.Handler) {
 		slog.Error("server error", "error", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	collectCancel()
+
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutCancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("shutdown error", "error", err)
 	}
 }

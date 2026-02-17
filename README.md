@@ -1,6 +1,6 @@
 # prompted
 
-Go mono-repo with four micro-services: **apigw**, **mq**, **streamer**, and **collector**.
+Go mono-repo with five micro-services: **apigw**, **mqwriter**, **mqreader**, **streamer**, and **collector**.
 
 ## Prerequisites
 
@@ -21,19 +21,36 @@ make up
 # 3. Run migrations
 make migrate-up
 
-# 4. Run a service (in separate terminals)
-make run-apigw      # :8080
-make run-mq         # :8081
-make run-streamer   # :8082
-make run-collector  # :8083
+# 4. Run services (each in its own terminal)
+make run-mqwriter    # :8084  – receives publishes, buffers, flushes to Postgres
+make run-mqreader    # :8085  – serves lease/ack from in-memory partition
+make run-streamer    # :8082  – reads CSV, streams telemetry to mqwriter
+make run-collector   # :8083  – leases from mqreader, persists to telemetry table
+make run-apigw       # :8080  – API gateway
 ```
 
 Verify a service is running:
 
 ```bash
-curl http://localhost:8080/healthz
-# {"status":"ok","service":"apigw"}
+curl http://localhost:8084/healthz
+# {"status":"ok","service":"mqwriter"}
 ```
+
+## Architecture
+
+```
+  Streamer ──POST /v1/publish──► MQWriter ──flush──► Postgres (queue_messages)
+                                                          │
+  Collector ◄──POST /v1/lease── MQReader ◄──poll──────────┘
+      │                              │
+      └──persist──► Postgres         └──POST /v1/ack──► MQReader ──delete──► Postgres
+         (telemetry)
+```
+
+- **MQWriter** – receives raw telemetry JSON, generates `msg_uuid`, computes `partition_key = FNV-1a(gpu_id) % 256`, buffers in memory, flushes to Postgres asynchronously. Exposes `GET /metrics/buffer` for HPA autoscaling.
+- **MQReader** – each pod owns a range of 256 virtual partitions, polls Postgres for its partition's rows into memory, serves `POST /v1/lease` and `POST /v1/ack` from the in-memory store. No contention between pods.
+- **Streamer** – reads a CSV file, stamps `time.Now().UTC()` on each row, writes timestamps back to disk, publishes each row as a single message to mqwriter.
+- **Collector** – polls mqreader for leased messages, parses payloads, inserts into the `telemetry` table with `ON CONFLICT (uuid) DO NOTHING` for idempotency, acks the lease only on full success.
 
 ## Project Structure
 
@@ -41,22 +58,25 @@ curl http://localhost:8080/healthz
 prompted/
 ├── cmd/
 │   ├── apigw/          # API gateway service
-│   ├── mq/             # Message queue service
-│   ├── streamer/       # Streamer service
-│   └── collector/      # Collector service
+│   ├── mqwriter/       # MQ write-side service
+│   ├── mqreader/       # MQ read-side service
+│   ├── streamer/       # CSV telemetry streamer
+│   └── collector/      # Telemetry collector/persister
 ├── internal/
 │   ├── config/         # Env-based configuration loader
 │   ├── db/             # Database connection & migration helpers
 │   ├── httpx/          # HTTP client wrapper with retries/timeouts
 │   ├── models/         # Shared domain structs
-│   ├── mq/             # MQ store, handlers, SQL queries
-│   └── streamer/       # CSV reader + streaming pipeline
+│   ├── mqwriter/       # Writer store, buffer, handler, SQL
+│   ├── mqreader/       # Reader store, partition, handler, SQL
+│   ├── streamer/       # CSV reader + streaming pipeline
+│   └── collector/      # Collector store, loop, SQL, tests
 ├── migrations/         # SQL migration files
 ├── samples/            # Sample data files (telemetry CSV)
 ├── deploy/helm/        # Helm charts (per-service + umbrella)
 ├── docker-compose.yaml # Local dev (PostgreSQL)
 ├── Dockerfile          # Multi-stage build (all services)
-├── Makefile            # Build, test, lint, run, migrate, swagger
+├── Makefile            # Build, test, lint, run, migrate
 └── .env.example        # Environment variable template
 ```
 
@@ -65,8 +85,8 @@ prompted/
 | Target              | Description                              |
 |---------------------|------------------------------------------|
 | `make build`        | Build all binaries into `./bin/`         |
-| `make build-apigw`  | Build a single service                   |
-| `make run-apigw`    | Run a single service via `go run`        |
+| `make build-mqwriter` | Build a single service                 |
+| `make run-mqwriter` | Run a single service via `go run`        |
 | `make test`         | Run all tests with race detector         |
 | `make test-cover`   | Run tests with HTML coverage report      |
 | `make lint`         | Run golangci-lint                        |
@@ -76,23 +96,71 @@ prompted/
 | `make up`           | Start docker-compose (PostgreSQL)        |
 | `make down`         | Stop docker-compose                      |
 | `make docker-build` | Build Docker images for all services     |
-| `make swagger`      | Generate Swagger docs                    |
 
 ## Configuration
 
 All services read configuration from environment variables. See `.env.example` for the full list.
 
-| Variable            | Default                                                              | Description          |
-|---------------------|----------------------------------------------------------------------|----------------------|
-| `PORT`              | 8080 (apigw), 8081 (mq), 8082 (streamer), 8083 (collector)         | Listen port          |
-| `LOG_LEVEL`         | `info`                                                               | `debug/info/warn/error` |
-| `DATABASE_URL`      | `postgres://prompted:prompted@localhost:5432/prompted?sslmode=disable` | PostgreSQL DSN       |
-| `UPSTREAM_TIMEOUT`  | `10s`                                                                | apigw upstream timeout |
-| `STREAMER_CSV_PATH` | `samples/telemetry.csv`                                              | Path to telemetry CSV |
-| `STREAMER_INTERVAL_MS` | `1000`                                                            | Delay (ms) between batches |
-| `STREAMER_BATCH_SIZE` | `100`                                                              | Rows per MQ publish call |
-| `MQ_BASE_URL`       | `http://localhost:8081`                                              | MQ service base URL  |
-| `COLLECT_INTERVAL`  | `30s`                                                                | collector tick rate  |
+| Variable | Default | Service | Description |
+|---|---|---|---|
+| `PORT` | 8080/8082-8085 | all | Listen port |
+| `LOG_LEVEL` | `info` | all | `debug/info/warn/error` |
+| `DATABASE_URL` | `postgres://...` | all (except streamer) | PostgreSQL DSN |
+| `MQ_PARTITION_COUNT` | `256` | mqwriter | Total virtual partitions |
+| `MQ_BUFFER_SIZE` | `500` | mqwriter | Buffer flush threshold (messages) |
+| `MQ_FLUSH_INTERVAL` | `500ms` | mqwriter | Buffer flush timer |
+| `READER_PARTITION_START` | `0` | mqreader | First owned partition |
+| `READER_PARTITION_END` | `255` | mqreader | Last owned partition |
+| `READER_POLL_INTERVAL` | `500ms` | mqreader | DB poll frequency |
+| `READER_POLL_BATCH` | `1000` | mqreader | Max rows per poll |
+| `STREAMER_CSV_PATH` | `samples/telemetry.csv` | streamer | CSV file path |
+| `STREAMER_INTERVAL_MS` | `1000` | streamer | Delay between messages |
+| `MQ_BASE_URL` | `http://localhost:8084` | streamer | MQWriter URL |
+| `STREAMER_CHANNEL_BUFFER` | `16` | streamer | Internal channel capacity |
+| `COLLECTOR_ID` | hostname | collector | Consumer identity |
+| `LEASE_SECONDS` | `30` | collector | Lease duration |
+| `LEASE_MAX` | `100` | collector | Max messages per lease |
+| `POLL_INTERVAL_MS` | `1000` | collector | Polling frequency |
+| `MQ_BASE_URL` | `http://localhost:8085` | collector | MQReader URL |
+
+## Running the Collector
+
+The collector leases messages from the MQ reader, persists them to the `telemetry` table, and acknowledges the lease.
+
+```bash
+# Terminal 1 – Postgres + migrations
+make up && make migrate-up
+
+# Terminal 2 – MQ writer (receives from streamer)
+make run-mqwriter
+
+# Terminal 3 – MQ reader (serves lease/ack to collector)
+make run-mqreader
+
+# Terminal 4 – Streamer (publishes telemetry to writer)
+make run-streamer
+
+# Terminal 5 – Collector (consumes from reader, persists to telemetry table)
+make run-collector
+```
+
+The collector polls `POST /v1/lease` on the mqreader. For each leased batch:
+
+1. Parses each message payload into a telemetry struct.
+2. Inserts into the `telemetry` table with `ON CONFLICT (uuid) DO NOTHING` for idempotency.
+3. If all inserts succeed, calls `POST /v1/ack` to remove the messages from the queue.
+4. If persistence fails, the lease is **not** acknowledged — messages will be redelivered after the lease expires.
+
+You can customise via environment:
+
+```bash
+COLLECTOR_ID=collector-0 \
+LEASE_MAX=50 \
+LEASE_SECONDS=15 \
+POLL_INTERVAL_MS=500 \
+MQ_BASE_URL=http://localhost:8085 \
+  make run-collector
+```
 
 ## Database Schema
 
@@ -106,78 +174,52 @@ make migrate-create NAME=add_foo   # scaffold a new migration pair
 
 ### `queue_messages`
 
-Backing table for the custom MQ broker. Each row is a message with a lifecycle state.
+Backing table for the MQ broker. Each row is a message with a lifecycle state.
 
-| Column       | Type          | Notes                                      |
-|--------------|---------------|--------------------------------------------|
-| `id`         | `bigserial`   | PK                                         |
-| `topic`      | `text`        | not null (e.g. `telemetry`)                |
-| `msg_uuid`   | `uuid`        | not null, unique per topic (dedup key)     |
-| `payload`    | `jsonb`       | not null                                   |
-| `state`      | `text`        | `ready` / `in_flight` / `acked`            |
-| `leased_by`  | `text`        | nullable – consumer identifier             |
-| `lease_id`   | `uuid`        | nullable – lease correlation ID            |
-| `lease_until`| `timestamptz` | nullable – lease expiry                    |
-| `attempts`   | `int`         | default 0                                  |
-| `created_at` | `timestamptz` | default `now()`                            |
-| `updated_at` | `timestamptz` | default `now()`                            |
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `bigserial` | PK |
+| `topic` | `text` | not null |
+| `msg_uuid` | `uuid` | not null, unique per topic (generated by mqwriter) |
+| `payload` | `jsonb` | not null (raw CSV row content) |
+| `state` | `text` | `ready` / `in_flight` / `acked` |
+| `leased_by` | `text` | nullable – consumer identifier |
+| `lease_id` | `uuid` | nullable – lease correlation ID |
+| `lease_until` | `timestamptz` | nullable – lease expiry |
+| `attempts` | `int` | default 0 |
+| `partition_key` | `int` | not null – `FNV-1a(gpu_id) % 256` |
+| `created_at` | `timestamptz` | default `now()` |
+| `updated_at` | `timestamptz` | default `now()` |
 
-**Indexes**: `UNIQUE(topic, msg_uuid)`, `(topic, state, lease_until)`, `(lease_id)`.
+**Indexes**: `UNIQUE(topic, msg_uuid)`, `(topic, state, lease_until)`, `(lease_id)`, `(partition_key, state, id)`.
 
 ### `telemetry`
 
-Persisted GPU telemetry entries written by the streamer.
+Persisted GPU telemetry entries written by the collector.
 
-| Column        | Type               | Notes                                 |
-|---------------|--------------------|---------------------------------------|
-| `id`          | `bigserial`        | PK                                    |
-| `uuid`        | `uuid`             | not null, unique (dedup key)          |
-| `gpu_id`      | `text`             | not null                              |
-| `metric_name` | `text`             | not null                              |
-| `timestamp`   | `timestamptz`      | not null – `processed_at` from streamer |
-| `model_name`  | `text`             | nullable                              |
-| `container`   | `text`             | nullable                              |
-| `pod`         | `text`             | nullable                              |
-| `namespace`   | `text`             | nullable                              |
-| `value`       | `double precision` | nullable                              |
-| `labels_raw`  | `text`             | nullable                              |
-| `ingested_at` | `timestamptz`      | default `now()`                       |
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `bigserial` | PK |
+| `uuid` | `uuid` | not null, unique (dedup key from CSV) |
+| `gpu_id` | `text` | not null |
+| `metric_name` | `text` | not null |
+| `timestamp` | `timestamptz` | not null |
+| `model_name` | `text` | nullable |
+| `container` | `text` | nullable |
+| `pod` | `text` | nullable |
+| `namespace` | `text` | nullable |
+| `value` | `double precision` | nullable |
+| `labels_raw` | `text` | nullable |
+| `ingested_at` | `timestamptz` | default `now()` |
 
 **Indexes**: `UNIQUE(uuid)`, `(gpu_id, timestamp)`.
-
-## Running the Streamer
-
-The streamer reads a CSV file and publishes rows to the MQ service. To run it locally:
-
-```bash
-# Terminal 1 – start Postgres and run migrations
-make up && make migrate-up
-
-# Terminal 2 – start the MQ service
-make run-mq
-
-# Terminal 3 – start the streamer (uses samples/telemetry.csv by default)
-make run-streamer
-```
-
-The streamer will loop continuously over the CSV, publishing batches to `POST /v1/publish` on the MQ. Since the MQ deduplicates on `(topic, msg_uuid)`, the first iteration inserts all rows and subsequent iterations report them as duplicates.
-
-You can customise the streamer via environment variables:
-
-```bash
-STREAMER_CSV_PATH=./my-data.csv \
-STREAMER_INTERVAL_MS=500 \
-STREAMER_BATCH_SIZE=50 \
-MQ_BASE_URL=http://localhost:8081 \
-  make run-streamer
-```
 
 ## Health Endpoints
 
 Every service exposes:
 
-- `GET /healthz` – liveness probe (always returns 200 if the process is up)
-- `GET /readyz` – readiness probe (checks downstream dependency: DB for mq/apigw/collector, MQ reachability for streamer)
+- `GET /healthz` – liveness probe (always 200 if the process is up)
+- `GET /readyz` – readiness probe (checks DB and/or MQ reachability)
 
 ## Logging
 

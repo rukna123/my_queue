@@ -47,7 +47,11 @@ type Streamer struct {
 // Collector holds configuration for the collector service.
 type Collector struct {
 	Base
-	CollectInterval time.Duration
+	MQBaseURL      string
+	CollectorID    string
+	LeaseSeconds   int
+	LeaseMax       int
+	PollIntervalMS int
 }
 
 // APIGW holds configuration for the API gateway service.
@@ -100,9 +104,14 @@ func LoadStreamer() Streamer {
 
 // LoadCollector returns the Collector service configuration.
 func LoadCollector() Collector {
+	hostname, _ := os.Hostname()
 	return Collector{
-		Base:            LoadBase(8083),
-		CollectInterval: GetEnvDuration("COLLECT_INTERVAL", 30*time.Second),
+		Base:           LoadBase(8083),
+		MQBaseURL:      GetEnv("MQ_BASE_URL", "http://localhost:8085"),
+		CollectorID:    GetEnv("COLLECTOR_ID", hostname),
+		LeaseSeconds:   GetEnvInt("LEASE_SECONDS", 30),
+		LeaseMax:       GetEnvInt("LEASE_MAX", 100),
+		PollIntervalMS: GetEnvInt("POLL_INTERVAL_MS", 1000),
 	}
 }
 
