@@ -1,7 +1,7 @@
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "prompted-mq.fullname" -}}
+{{- define "prompted-mqwriter.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}

@@ -8,9 +8,12 @@ dependencies:
   - name: apigw
     version: "0.1.0"
     repository: "file://../apigw"
-  - name: mq
+  - name: mqwriter
     version: "0.1.0"
-    repository: "file://../mq"
+    repository: "file://../mqwriter"
+  - name: mqreader
+    version: "0.1.0"
+    repository: "file://../mqreader"
   - name: streamer
     version: "0.1.0"
     repository: "file://../streamer"

@@ -1,0 +1,26 @@
+replicaCount: 1
+
+image:
+  repository: prompted-mqwriter
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8084
+
+resources:
+  limits:
+    memory: 256Mi
+    cpu: 200m
+  requests:
+    memory: 128Mi
+    cpu: 100m
+
+env:
+  LOG_LEVEL: info
+  PORT: "8084"
+  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable
+  MQ_PARTITION_COUNT: "256"
+  MQ_BUFFER_SIZE: "500"
+  MQ_FLUSH_INTERVAL: 500ms

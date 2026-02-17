@@ -1,0 +1,5 @@
+apiVersion: v2
+name: prompted-mqreader
+description: Helm chart for the prompted MQ reader service
+version: 0.1.0
+appVersion: "0.1.0"

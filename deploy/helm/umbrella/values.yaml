@@ -9,11 +9,17 @@
 #     env:
 #       LOG_LEVEL: debug
 #
-#   mq:
-#     replicaCount: 1
+#   mqwriter:
+#     replicaCount: 2
 #     resources:
 #       limits:
-#         memory: 256Mi
+#         memory: 512Mi
+#
+#   mqreader:
+#     replicaCount: 3
+#     env:
+#       READER_PARTITION_START: "0"
+#       READER_PARTITION_END: "85"
 #
 #   streamer:
 #     image:
