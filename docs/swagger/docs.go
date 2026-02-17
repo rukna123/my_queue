@@ -125,7 +125,13 @@ const docTemplate = `{
                 "container": {
                     "type": "string"
                 },
+                "device": {
+                    "type": "string"
+                },
                 "gpu_id": {
+                    "type": "string"
+                },
+                "hostname": {
                     "type": "string"
                 },
                 "ingested_at": {

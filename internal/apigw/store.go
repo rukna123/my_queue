@@ -13,7 +13,9 @@ type TelemetryEntry struct {
 	GPUID      string    `json:"gpu_id"`
 	MetricName string    `json:"metric_name"`
 	Timestamp  time.Time `json:"timestamp"`
+	Device     *string   `json:"device"`
 	ModelName  *string   `json:"model_name"`
+	Hostname   *string   `json:"hostname"`
 	Container  *string   `json:"container"`
 	Pod        *string   `json:"pod"`
 	Namespace  *string   `json:"namespace"`
@@ -68,7 +70,9 @@ func (s *Store) GetTelemetry(ctx context.Context, gpuID string, start, end time.
 			&e.GPUID,
 			&e.MetricName,
 			&e.Timestamp,
+			&e.Device,
 			&e.ModelName,
+			&e.Hostname,
 			&e.Container,
 			&e.Pod,
 			&e.Namespace,

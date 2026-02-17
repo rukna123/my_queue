@@ -23,8 +23,10 @@ type telemetryPayload struct {
 	Timestamp  time.Time `json:"timestamp"`
 	MetricName string    `json:"metric_name"`
 	GPUID      string    `json:"gpu_id"`
+	Device     string    `json:"device"`
 	UUID       string    `json:"uuid"`
 	ModelName  string    `json:"model_name"`
+	Hostname   string    `json:"hostname"`
 	Container  string    `json:"container"`
 	Pod        string    `json:"pod"`
 	Namespace  string    `json:"namespace"`
@@ -148,8 +150,10 @@ func publishMessage(ctx context.Context, client *httpx.Client, url string, row T
 		Timestamp:  row.Timestamp,
 		MetricName: row.MetricName,
 		GPUID:      row.GPUID,
+		Device:     row.Device,
 		UUID:       row.UUID,
 		ModelName:  row.ModelName,
+		Hostname:   row.Hostname,
 		Container:  row.Container,
 		Pod:        row.Pod,
 		Namespace:  row.Namespace,

@@ -15,7 +15,9 @@ type TelemetryRow struct {
 	GPUID      string    `json:"gpu_id"`
 	MetricName string    `json:"metric_name"`
 	Timestamp  time.Time `json:"timestamp"`
+	Device     string    `json:"device"`
 	ModelName  string    `json:"model_name"`
+	Hostname   string    `json:"hostname"`
 	Container  string    `json:"container"`
 	Pod        string    `json:"pod"`
 	Namespace  string    `json:"namespace"`
@@ -67,7 +69,9 @@ func (s *Store) PersistBatch(ctx context.Context, rows []TelemetryRow) (persiste
 			row.GPUID,
 			row.MetricName,
 			row.Timestamp,
+			nullStr(row.Device),
 			nullStr(row.ModelName),
+			nullStr(row.Hostname),
 			nullStr(row.Container),
 			nullStr(row.Pod),
 			nullStr(row.Namespace),

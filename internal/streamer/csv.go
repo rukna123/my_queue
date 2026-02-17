@@ -19,8 +19,10 @@ type TelemetryRow struct {
 	Timestamp  time.Time
 	MetricName string
 	GPUID      string
+	Device     string
 	UUID       string
 	ModelName  string
+	Hostname   string
 	Container  string
 	Pod        string
 	Namespace  string
@@ -29,16 +31,18 @@ type TelemetryRow struct {
 }
 
 // csvHeader is written as the first row of every CSV we produce.
+// Column order: timestamp, metric_name, gpu_id, device, uuid,
+// model_name, hostname, container, pod, namespace, value, labels_raw
 var csvHeader = []string{
-	"timestamp", "metric_name", "gpu_id", "uuid",
-	"model_name", "container", "pod", "namespace",
+	"timestamp", "metric_name", "gpu_id", "device", "uuid",
+	"model_name", "hostname", "container", "pod", "namespace",
 	"value", "labels_raw",
 }
 
 // ReadCSV loads and parses a telemetry CSV file.
 // Expected header (first row is skipped):
 //
-//	timestamp, metric_name, gpu_id, uuid, model_name, container, pod, namespace, value, labels_raw
+//	timestamp, metric_name, gpu_id, device, uuid, model_name, hostname, container, pod, namespace, value, labels_raw
 func ReadCSV(path string) ([]TelemetryRow, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -66,27 +70,29 @@ func ReadCSV(path string) ([]TelemetryRow, error) {
 		if err != nil {
 			return nil, fmt.Errorf("csv line %d: %w", lineNum, err)
 		}
-		if len(record) < 10 {
-			return nil, fmt.Errorf("csv line %d: expected 10 fields, got %d", lineNum, len(record))
+		if len(record) < 12 {
+			return nil, fmt.Errorf("csv line %d: expected 12 fields, got %d", lineNum, len(record))
 		}
 
-		val, _ := strconv.ParseFloat(strings.TrimSpace(record[8]), 64)
+		val, _ := strconv.ParseFloat(strings.TrimSpace(record[10]), 64)
 
 		// Parse the timestamp from CSV. If it cannot be parsed (e.g. first
 		// run with placeholder data), it stays as the zero time.
 		ts, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(record[0]))
 
 		rows = append(rows, TelemetryRow{
-			Timestamp:  ts,
-			MetricName: strings.TrimSpace(record[1]),
-			GPUID:      strings.TrimSpace(record[2]),
-			UUID:       strings.TrimSpace(record[3]),
-			ModelName:  strings.TrimSpace(record[4]),
-			Container:  strings.TrimSpace(record[5]),
-			Pod:        strings.TrimSpace(record[6]),
-			Namespace:  strings.TrimSpace(record[7]),
-			Value:      val,
-			LabelsRaw:  strings.TrimSpace(record[9]),
+			Timestamp:  ts,                            // [0]
+			MetricName: strings.TrimSpace(record[1]),  // [1]
+			GPUID:      strings.TrimSpace(record[2]),  // [2]
+			Device:     strings.TrimSpace(record[3]),  // [3]
+			UUID:       strings.TrimSpace(record[4]),  // [4]
+			ModelName:  strings.TrimSpace(record[5]),  // [5]
+			Hostname:   strings.TrimSpace(record[6]),  // [6]
+			Container:  strings.TrimSpace(record[7]),  // [7]
+			Pod:        strings.TrimSpace(record[8]),  // [8]
+			Namespace:  strings.TrimSpace(record[9]),  // [9]
+			Value:      val,                           // [10]
+			LabelsRaw:  strings.TrimSpace(record[11]), // [11]
 		})
 	}
 
@@ -125,8 +131,10 @@ func WriteCSV(path string, rows []TelemetryRow) error {
 			ts,
 			row.MetricName,
 			row.GPUID,
+			row.Device,
 			row.UUID,
 			row.ModelName,
+			row.Hostname,
 			row.Container,
 			row.Pod,
 			row.Namespace,

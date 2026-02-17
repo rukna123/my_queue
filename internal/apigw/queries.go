@@ -12,8 +12,8 @@ const (
 	// optionally bounded by a time window.
 	// Parameters: $1 = gpu_id, $2 = start_time, $3 = end_time.
 	queryTelemetryByGPU = `
-SELECT uuid, gpu_id, metric_name, timestamp, model_name, container,
-       pod, namespace, value, labels_raw, ingested_at
+SELECT uuid, gpu_id, metric_name, timestamp, device, model_name,
+       hostname, container, pod, namespace, value, labels_raw, ingested_at
 FROM telemetry
 WHERE gpu_id = $1
   AND timestamp >= $2

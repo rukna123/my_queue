@@ -9,8 +9,8 @@ const (
 	// same datapoint is silently skipped if already persisted.
 	// RETURNING true lets us distinguish inserts from no-ops.
 	queryInsertTelemetry = `
-INSERT INTO telemetry (uuid, gpu_id, metric_name, timestamp, model_name, container, pod, namespace, value, labels_raw)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO telemetry (uuid, gpu_id, metric_name, timestamp, device, model_name, hostname, container, pod, namespace, value, labels_raw)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (uuid) DO NOTHING
 RETURNING true`
 )
