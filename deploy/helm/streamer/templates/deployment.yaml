@@ -14,18 +14,6 @@ spec:
       labels:
         {{- include "streamer.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if .Values.csv.enabled }}
-      initContainers:
-        - name: copy-csv
-          image: busybox:1.36
-          command: ["cp", "/configmap/telemetry.csv", "/data/telemetry.csv"]
-          volumeMounts:
-            - name: csv-configmap
-              mountPath: /configmap
-              readOnly: true
-            - name: csv-writable
-              mountPath: /data
-      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -57,8 +45,10 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             {{- if .Values.csv.enabled }}
-            - name: csv-writable
-              mountPath: /data
+            - name: csv-data
+              mountPath: {{ .Values.csv.mountPath }}
+              subPath: {{ .Values.csv.subPath }}
+              readOnly: true
             {{- end }}
             {{- if .Values.pvc.enabled }}
             - name: csv-pvc
@@ -66,11 +56,9 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.csv.enabled }}
-        - name: csv-configmap
+        - name: csv-data
           configMap:
             name: {{ include "streamer.fullname" . }}-csv
-        - name: csv-writable
-          emptyDir: {}
         {{- end }}
         {{- if .Values.pvc.enabled }}
         - name: csv-pvc

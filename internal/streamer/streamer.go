@@ -91,19 +91,23 @@ func Run(ctx context.Context, cfg config.Streamer, client *httpx.Client) {
 // on out. It sleeps IntervalMS between messages.
 //
 // For every row it:
-//  1. Stamps time.Now().UTC() on the original rows slice entry.
-//  2. Writes the full CSV back to disk so the file reflects the last-processed
-//     timestamp for every row.
+//  1. Stamps time.Now().UTC() on the in-memory rows slice entry.
+//  2. Attempts to write the CSV back to disk (best-effort; skipped silently
+//     when the filesystem is read-only, e.g. ConfigMap mount in Kubernetes).
 //  3. Copies the row and sends it through the channel to the sender.
 func readLoop(ctx context.Context, rows []TelemetryRow, intervalMS int, csvPath string, out chan<- TelemetryRow) {
 	interval := time.Duration(intervalMS) * time.Millisecond
+	diskWritable := true
 
 	for {
 		for i := range rows {
 			rows[i].Timestamp = time.Now().UTC()
 
-			if err := WriteCSV(csvPath, rows); err != nil {
-				slog.Error("failed to write CSV back to disk", "error", err)
+			if diskWritable {
+				if err := WriteCSV(csvPath, rows); err != nil {
+					slog.Warn("csv disk write failed, continuing in-memory only", "error", err)
+					diskWritable = false
+				}
 			}
 
 			// Copy the row so the sender owns its data.
