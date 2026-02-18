@@ -1,5 +1,5 @@
 apiVersion: v2
-name: prompted-streamer
-description: Helm chart for the prompted streamer service
+name: streamer
+description: Streamer – reads CSV telemetry data, publishes to MQ writer
 version: 0.1.0
 appVersion: "0.1.0"

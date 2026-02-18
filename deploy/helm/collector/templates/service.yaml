@@ -1,10 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "prompted-collector.fullname" . }}
+  name: {{ include "collector.fullname" . }}
   labels:
-    app.kubernetes.io/name: prompted-collector
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "collector.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -13,5 +12,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: prompted-collector
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "collector.selectorLabels" . | nindent 4 }}

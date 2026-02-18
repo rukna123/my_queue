@@ -1,30 +1,34 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "prompted-collector.fullname" . }}
+  name: {{ include "collector.fullname" . }}
   labels:
-    app.kubernetes.io/name: prompted-collector
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "collector.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: prompted-collector
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "collector.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: prompted-collector
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "collector.selectorLabels" . | nindent 8 }}
     spec:
       containers:
-        - name: prompted-collector
+        - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "collector.fullname" . }}
+            - secretRef:
+                name: {{ include "collector.fullname" . }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -41,10 +45,5 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
-          env:
-            {{- range $key, $value := .Values.env }}
-            - name: {{ $key }}
-              value: {{ $value | quote }}
-            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

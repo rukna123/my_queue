@@ -1,10 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "prompted-apigw.fullname" . }}
+  name: {{ include "apigw.fullname" . }}
   labels:
-    app.kubernetes.io/name: prompted-apigw
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "apigw.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -13,5 +12,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: prompted-apigw
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "apigw.selectorLabels" . | nindent 4 }}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // Store provides DB operations for the reader service.
@@ -19,110 +18,55 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// MemMsg is a message held in the reader's in-memory partition.
-type MemMsg struct {
-	ID         int64
-	Topic      string
-	MsgUUID    string
-	Payload    json.RawMessage
-	State      string // "ready" or "in_flight"
-	LeasedBy   string
-	LeaseID    string
-	LeaseUntil time.Time
-	Attempts   int
-	CreatedAt  time.Time
+// BufMsg is a message loaded from the DB into the in-memory buffer.
+// No state tracking — existence in DB means unprocessed.
+type BufMsg struct {
+	ID      int64
+	Topic   string
+	MsgUUID string
+	Payload json.RawMessage
 }
 
-// PollReady fetches new ready (or expired in-flight) rows for the partition
-// range, starting after lastID.  Returns the rows and the maximum ID seen.
-func (s *Store) PollReady(ctx context.Context, partStart, partEnd int, lastID int64, limit int) ([]*MemMsg, int64, error) {
-	rows, err := s.db.QueryContext(ctx, queryPollReady, partStart, partEnd, lastID, limit)
+// FetchBatch loads the oldest `limit` unprocessed messages for the
+// given partition range.
+func (s *Store) FetchBatch(ctx context.Context, partStart, partEnd, limit int) ([]BufMsg, error) {
+	rows, err := s.db.QueryContext(ctx, queryFetchBatch, partStart, partEnd, limit)
 	if err != nil {
-		return nil, lastID, fmt.Errorf("poll ready: %w", err)
+		return nil, fmt.Errorf("fetch batch: %w", err)
 	}
 	defer rows.Close()
 
-	var msgs []*MemMsg
-	maxID := lastID
-
+	var msgs []BufMsg
 	for rows.Next() {
-		var m MemMsg
-		var leasedBy, leaseID sql.NullString
-		var leaseUntil sql.NullTime
-
-		if err := rows.Scan(
-			&m.ID, &m.Topic, &m.MsgUUID, &m.Payload, &m.State,
-			&leasedBy, &leaseID, &leaseUntil,
-			&m.Attempts, &m.CreatedAt,
-		); err != nil {
-			return nil, lastID, fmt.Errorf("scan: %w", err)
+		var m BufMsg
+		if err := rows.Scan(&m.ID, &m.Topic, &m.MsgUUID, &m.Payload); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
 		}
-
-		if leasedBy.Valid {
-			m.LeasedBy = leasedBy.String
-		}
-		if leaseID.Valid {
-			m.LeaseID = leaseID.String
-		}
-		if leaseUntil.Valid {
-			m.LeaseUntil = leaseUntil.Time
-		}
-
-		// Reset expired in-flight messages to ready state in memory.
-		if m.State == "in_flight" && m.LeaseUntil.Before(time.Now()) {
-			m.State = "ready"
-			m.LeasedBy = ""
-			m.LeaseID = ""
-			m.LeaseUntil = time.Time{}
-		}
-
-		msgs = append(msgs, &m)
-		if m.ID > maxID {
-			maxID = m.ID
-		}
+		msgs = append(msgs, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, lastID, fmt.Errorf("rows: %w", err)
+		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return msgs, maxID, nil
+	return msgs, nil
 }
 
-// LeaseByIDs updates specific rows in the DB to in-flight state.
-func (s *Store) LeaseByIDs(ctx context.Context, consumerID, leaseID string, leaseSeconds int, ids []int64) error {
+// DeleteByIDs removes processed messages from the queue in a single call.
+func (s *Store) DeleteByIDs(ctx context.Context, ids []int64) (int64, error) {
 	if len(ids) == 0 {
-		return nil
+		return 0, nil
 	}
 
-	// Build parameterised IN-list: $4, $5, $6, …
 	placeholders := make([]string, len(ids))
-	args := make([]any, 0, 3+len(ids))
-	args = append(args, consumerID, leaseID, leaseSeconds)
+	args := make([]any, len(ids))
 	for i, id := range ids {
-		placeholders[i] = fmt.Sprintf("$%d", i+4)
-		args = append(args, id)
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
 	}
 
-	query := `UPDATE queue_messages
-SET state      = 'in_flight',
-    leased_by  = $1,
-    lease_id   = $2,
-    lease_until = now() + $3::int * interval '1 second',
-    attempts   = attempts + 1,
-    updated_at = now()
-WHERE id IN (` + strings.Join(placeholders, ", ") + `)`
-
-	_, err := s.db.ExecContext(ctx, query, args...)
+	query := "DELETE FROM queue_messages WHERE id IN (" + strings.Join(placeholders, ", ") + ")"
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("lease by IDs: %w", err)
-	}
-	return nil
-}
-
-// Ack deletes messages belonging to a lease batch within the partition range.
-func (s *Store) Ack(ctx context.Context, topic, consumerID, leaseID string, partStart, partEnd int) (int64, error) {
-	res, err := s.db.ExecContext(ctx, queryAck, topic, consumerID, leaseID, partStart, partEnd)
-	if err != nil {
-		return 0, fmt.Errorf("ack: %w", err)
+		return 0, fmt.Errorf("delete by IDs: %w", err)
 	}
 	return res.RowsAffected()
 }

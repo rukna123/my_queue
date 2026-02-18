@@ -17,10 +17,18 @@ resources:
     memory: 128Mi
     cpu: 100m
 
-env:
+config:
   LOG_LEVEL: info
   PORT: "8084"
-  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable
   MQ_PARTITION_COUNT: "256"
   MQ_BUFFER_SIZE: "500"
-  MQ_FLUSH_INTERVAL: 500ms
+  MQ_FLUSH_INTERVAL: "500ms"
+
+secret:
+  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70

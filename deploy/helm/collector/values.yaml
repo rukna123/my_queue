@@ -12,11 +12,25 @@ service:
 resources:
   limits:
     memory: 128Mi
-    cpu: 100m
+    cpu: 200m
   requests:
     memory: 64Mi
     cpu: 50m
 
-env:
+config:
   LOG_LEVEL: info
-  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable
+  PORT: "8083"
+  MQ_BASE_URL: http://prompted-mqreader:8085
+  COLLECTOR_ID: collector-0
+  LEASE_SECONDS: "30"
+  LEASE_MAX: "100"
+  POLL_INTERVAL_MS: "1000"
+
+secret:
+  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70

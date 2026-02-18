@@ -10,8 +10,6 @@ import (
 )
 
 // LeasedMsg is returned to clients from a lease call.
-// It carries the mqwriter-generated msg_uuid so consumers can use it as
-// the authoritative dedup key (e.g. for the telemetry table).
 type LeasedMsg struct {
 	MsgUUID string          `json:"msg_uuid"`
 	Payload json.RawMessage `json:"payload"`
@@ -30,7 +28,6 @@ type AckResult struct {
 	Err   error `json:"-"`
 }
 
-// leaseCmd is sent to the partition owner goroutine.
 type leaseCmd struct {
 	topic        string
 	consumerID   string
@@ -39,7 +36,6 @@ type leaseCmd struct {
 	reply        chan LeaseResult
 }
 
-// ackCmd is sent to the partition owner goroutine.
 type ackCmd struct {
 	topic      string
 	consumerID string
@@ -47,34 +43,39 @@ type ackCmd struct {
 	reply      chan AckResult
 }
 
-// Partition is an in-memory store for a range of virtual partitions.
-// It uses the owner-goroutine pattern: a single goroutine (Run) owns all
-// state and processes commands sequentially.  No mutexes.
+// servedBatch tracks messages that have been given to a collector
+// and are awaiting ack or expiry.
+type servedBatch struct {
+	ids      []int64
+	servedAt time.Time
+	timeout  time.Duration
+}
+
+// Partition is an in-memory buffer for a range of virtual partitions.
+// Single owner goroutine, no mutexes.
 type Partition struct {
-	store        *Store
-	partStart    int
-	partEnd      int
-	pollInterval time.Duration
-	pollBatch    int
+	store     *Store
+	partStart int
+	partEnd   int
+	batchSize int
 
 	leaseCh chan leaseCmd
 	ackCh   chan ackCmd
 }
 
 // NewPartition creates a Partition for the given virtual-partition range.
-func NewPartition(store *Store, partStart, partEnd int, pollInterval time.Duration, pollBatch int) *Partition {
+func NewPartition(store *Store, partStart, partEnd int, _ time.Duration, batchSize int) *Partition {
 	return &Partition{
-		store:        store,
-		partStart:    partStart,
-		partEnd:      partEnd,
-		pollInterval: pollInterval,
-		pollBatch:    pollBatch,
-		leaseCh:      make(chan leaseCmd, 16),
-		ackCh:        make(chan ackCmd, 16),
+		store:     store,
+		partStart: partStart,
+		partEnd:   partEnd,
+		batchSize: batchSize,
+		leaseCh:   make(chan leaseCmd, 16),
+		ackCh:     make(chan ackCmd, 16),
 	}
 }
 
-// Lease sends a lease command to the partition goroutine and waits for the result.
+// Lease sends a lease command to the owner goroutine and waits for the result.
 func (p *Partition) Lease(ctx context.Context, topic, consumerID string, max, leaseSeconds int) LeaseResult {
 	reply := make(chan LeaseResult, 1)
 	cmd := leaseCmd{
@@ -99,7 +100,7 @@ func (p *Partition) Lease(ctx context.Context, topic, consumerID string, max, le
 	}
 }
 
-// Ack sends an ack command to the partition goroutine and waits for the result.
+// Ack sends an ack command to the owner goroutine and waits for the result.
 func (p *Partition) Ack(ctx context.Context, topic, consumerID, leaseID string) AckResult {
 	reply := make(chan AckResult, 1)
 	cmd := ackCmd{
@@ -123,147 +124,179 @@ func (p *Partition) Ack(ctx context.Context, topic, consumerID, leaseID string) 
 	}
 }
 
-// Run is the partition's owner goroutine.  It polls the DB for new rows and
-// processes lease/ack commands.  Blocks until ctx is cancelled.
+// Run is the owner goroutine.  It manages a buffer of messages loaded from
+// the DB and processes lease/ack commands.  Blocks until ctx is cancelled.
+//
+// Lifecycle of a message:
+//   - Exists in DB  →  loaded into buffer (ready to serve)
+//   - Lease request →  popped from buffer, tracked in served map
+//   - Ack received  →  marked done, ID queued for batch DELETE
+//   - Lease expired →  dropped from served map; row stays in DB,
+//     will be re-loaded on next refill
+//   - Batch complete (buffer empty + no outstanding served) →
+//     DELETE done IDs from DB, refill buffer
 func (p *Partition) Run(ctx context.Context) {
-	msgs := make(map[int64]*MemMsg)
-	var lastID int64
+	// buffer holds messages ready to be served (FIFO order).
+	var buffer []BufMsg
 
-	doPoll := func() {
-		newMsgs, maxID, err := p.store.PollReady(ctx, p.partStart, p.partEnd, lastID, p.pollBatch)
+	// served tracks messages given to collectors, keyed by lease_id.
+	served := make(map[string]*servedBatch)
+
+	// doneIDs accumulates DB row IDs to batch-delete.
+	var doneIDs []int64
+
+	// refill loads a batch from DB into the buffer, skipping IDs
+	// currently in the served map.
+	servedIDs := func() map[int64]bool {
+		m := make(map[int64]bool)
+		for _, sb := range served {
+			for _, id := range sb.ids {
+				m[id] = true
+			}
+		}
+		return m
+	}
+
+	refill := func() {
+		// Flush completed deletes before refilling.
+		if len(doneIDs) > 0 {
+			deleted, err := p.store.DeleteByIDs(ctx, doneIDs)
+			if err != nil {
+				slog.Error("batch delete failed", "error", err)
+			} else {
+				slog.Info("batch deleted from DB", "deleted", deleted)
+			}
+			doneIDs = doneIDs[:0]
+		}
+
+		msgs, err := p.store.FetchBatch(ctx, p.partStart, p.partEnd, p.batchSize)
 		if err != nil {
-			slog.Error("partition poll failed",
+			slog.Error("fetch batch failed",
 				"part_start", p.partStart,
 				"part_end", p.partEnd,
 				"error", err,
 			)
 			return
 		}
-		for _, m := range newMsgs {
-			msgs[m.ID] = m
+
+		// Skip messages that are currently outstanding (served but not acked/expired).
+		skip := servedIDs()
+		for _, m := range msgs {
+			if !skip[m.ID] {
+				buffer = append(buffer, m)
+			}
 		}
-		if maxID > lastID {
-			lastID = maxID
-		}
-		if len(newMsgs) > 0 {
-			slog.Debug("partition polled",
-				"part_start", p.partStart,
-				"new_msgs", len(newMsgs),
-				"total_in_mem", len(msgs),
+
+		if len(buffer) > 0 {
+			slog.Info("buffer refilled",
+				"loaded", len(buffer),
+				"skipped_served", len(skip),
 			)
 		}
 	}
 
-	doLease := func(cmd leaseCmd) {
-		leaseID := uuid.New().String()
-		now := time.Now()
-		leaseUntil := now.Add(time.Duration(cmd.leaseSeconds) * time.Second)
-
-		// Select up to max ready messages for this topic.
-		var candidates []*MemMsg
-		for _, m := range msgs {
-			if m.Topic == cmd.topic && m.State == "ready" {
-				candidates = append(candidates, m)
-				if len(candidates) >= cmd.max {
-					break
-				}
-			}
-		}
-
-		if len(candidates) == 0 {
-			cmd.reply <- LeaseResult{LeaseID: leaseID, Messages: []LeasedMsg{}}
-			return
-		}
-
-		// Collect IDs for DB update.
-		ids := make([]int64, len(candidates))
-		for i, c := range candidates {
-			ids[i] = c.ID
-		}
-
-		// Persist lease to DB.
-		if err := p.store.LeaseByIDs(ctx, cmd.consumerID, leaseID, cmd.leaseSeconds, ids); err != nil {
-			slog.Error("partition lease DB update failed", "error", err)
-			cmd.reply <- LeaseResult{Err: err}
-			return
-		}
-
-		// Update in-memory state and build response.
-		result := make([]LeasedMsg, len(candidates))
-		for i, c := range candidates {
-			c.State = "in_flight"
-			c.LeasedBy = cmd.consumerID
-			c.LeaseID = leaseID
-			c.LeaseUntil = leaseUntil
-			c.Attempts++
-			result[i] = LeasedMsg{MsgUUID: c.MsgUUID, Payload: c.Payload}
-		}
-
-		slog.Info("partition leased",
-			"topic", cmd.topic,
-			"consumer_id", cmd.consumerID,
-			"lease_id", leaseID,
-			"count", len(result),
-		)
-
-		cmd.reply <- LeaseResult{LeaseID: leaseID, Messages: result}
-	}
-
-	doAck := func(cmd ackCmd) {
-		// Delete from DB.
-		acked, err := p.store.Ack(ctx, cmd.topic, cmd.consumerID, cmd.leaseID, p.partStart, p.partEnd)
-		if err != nil {
-			slog.Error("partition ack DB delete failed", "error", err)
-			cmd.reply <- AckResult{Err: err}
-			return
-		}
-
-		// Remove from memory.
-		for id, m := range msgs {
-			if m.Topic == cmd.topic && m.LeasedBy == cmd.consumerID && m.LeaseID == cmd.leaseID {
-				delete(msgs, id)
-			}
-		}
-
-		slog.Info("partition acked",
-			"topic", cmd.topic,
-			"consumer_id", cmd.consumerID,
-			"lease_id", cmd.leaseID,
-			"acked", acked,
-		)
-
-		cmd.reply <- AckResult{Acked: acked}
-	}
-
-	// Initial poll to warm the partition.
-	doPoll()
+	// Initial fill.
+	refill()
 	slog.Info("partition started",
 		"part_start", p.partStart,
 		"part_end", p.partEnd,
-		"in_memory", len(msgs),
+		"buffered", len(buffer),
 	)
 
-	pollTicker := time.NewTicker(p.pollInterval)
-	defer pollTicker.Stop()
+	expireTicker := time.NewTicker(1 * time.Second)
+	defer expireTicker.Stop()
 
 	for {
 		select {
 		case cmd := <-p.leaseCh:
-			doLease(cmd)
+			// If buffer is empty and nothing outstanding, try refilling now.
+			if len(buffer) == 0 && len(served) == 0 {
+				refill()
+			}
+
+			leaseID := uuid.New().String()
+
+			// Pop up to cmd.max messages from the front of the buffer.
+			n := cmd.max
+			if n > len(buffer) {
+				n = len(buffer)
+			}
+
+			if n == 0 {
+				cmd.reply <- LeaseResult{LeaseID: leaseID, Messages: []LeasedMsg{}}
+				continue
+			}
+
+			batch := buffer[:n]
+			buffer = buffer[n:]
+
+			ids := make([]int64, n)
+			result := make([]LeasedMsg, n)
+			for i, m := range batch {
+				ids[i] = m.ID
+				result[i] = LeasedMsg{MsgUUID: m.MsgUUID, Payload: m.Payload}
+			}
+
+			served[leaseID] = &servedBatch{
+				ids:      ids,
+				servedAt: time.Now(),
+				timeout:  time.Duration(cmd.leaseSeconds) * time.Second,
+			}
+
+			slog.Info("served from buffer",
+				"topic", cmd.topic,
+				"consumer_id", cmd.consumerID,
+				"lease_id", leaseID,
+				"count", n,
+				"buffer_remaining", len(buffer),
+			)
+
+			cmd.reply <- LeaseResult{LeaseID: leaseID, Messages: result}
+
 		case cmd := <-p.ackCh:
-			doAck(cmd)
-		case <-pollTicker.C:
-			doPoll()
-			// Also expire stale in-flight messages.
+			sb, ok := served[cmd.leaseID]
+			if !ok {
+				cmd.reply <- AckResult{Acked: 0}
+				continue
+			}
+
+			doneIDs = append(doneIDs, sb.ids...)
+			acked := int64(len(sb.ids))
+			delete(served, cmd.leaseID)
+
+			slog.Info("acked",
+				"lease_id", cmd.leaseID,
+				"consumer_id", cmd.consumerID,
+				"acked", acked,
+				"pending_delete", len(doneIDs),
+			)
+
+			// If batch is complete (nothing in buffer, nothing outstanding)
+			// flush deletes now so next lease triggers a clean refill.
+			if len(buffer) == 0 && len(served) == 0 && len(doneIDs) > 0 {
+				deleted, err := p.store.DeleteByIDs(ctx, doneIDs)
+				if err != nil {
+					slog.Error("batch delete failed", "error", err)
+				} else {
+					slog.Info("batch deleted from DB", "deleted", deleted)
+				}
+				doneIDs = doneIDs[:0]
+			}
+
+			cmd.reply <- AckResult{Acked: acked}
+
+		case <-expireTicker.C:
 			now := time.Now()
-			for _, m := range msgs {
-				if m.State == "in_flight" && m.LeaseUntil.Before(now) {
-					m.State = "ready"
-					m.LeasedBy = ""
-					m.LeaseID = ""
-					m.LeaseUntil = time.Time{}
+			for leaseID, sb := range served {
+				if now.Sub(sb.servedAt) > sb.timeout {
+					slog.Warn("lease expired, dropping from memory (will be re-read from DB)",
+						"lease_id", leaseID,
+						"ids", sb.ids,
+					)
+					delete(served, leaseID)
 				}
 			}
+
 		case <-ctx.Done():
 			return
 		}

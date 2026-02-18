@@ -1,0 +1,86 @@
+# =============================================================================
+# Telemetry Pipeline – Umbrella Values
+# =============================================================================
+# Override any sub-chart value by nesting under the chart name.
+# All DATABASE_URL values below point to the postgresql-ha Pgpool service
+# created by this chart: <release>-postgresql-ha-pgpool:5432
+# =============================================================================
+
+# ---- PostgreSQL HA (Bitnami) ------------------------------------------------
+postgresql-ha:
+  postgresql:
+    database: prompted
+    username: prompted
+    password: prompted
+    repmgrPassword: repmgr-secret
+  pgpool:
+    adminPassword: pgpool-admin-secret
+  persistence:
+    size: 8Gi
+
+# ---- API Gateway ------------------------------------------------------------
+apigw:
+  replicaCount: 1
+  config:
+    LOG_LEVEL: info
+    PORT: "8080"
+  secret:
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+  autoscaling:
+    enabled: false
+
+# ---- MQ Writer --------------------------------------------------------------
+mqwriter:
+  replicaCount: 1
+  config:
+    LOG_LEVEL: info
+    PORT: "8084"
+    MQ_PARTITION_COUNT: "256"
+    MQ_BUFFER_SIZE: "500"
+    MQ_FLUSH_INTERVAL: "500ms"
+  secret:
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+  autoscaling:
+    enabled: false
+
+# ---- MQ Reader --------------------------------------------------------------
+mqreader:
+  replicaCount: 1
+  config:
+    LOG_LEVEL: info
+    PORT: "8085"
+    READER_PARTITION_START: "0"
+    READER_PARTITION_END: "255"
+    READER_POLL_INTERVAL: "500ms"
+    READER_POLL_BATCH: "1000"
+  secret:
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+
+# ---- Streamer ---------------------------------------------------------------
+streamer:
+  replicaCount: 1
+  config:
+    LOG_LEVEL: info
+    PORT: "8082"
+    MQ_BASE_URL: http://prompted-mqwriter:8084
+    STREAMER_CSV_PATH: /data/telemetry.csv
+    STREAMER_INTERVAL_MS: "1000"
+    STREAMER_CHANNEL_BUFFER: "16"
+  csv:
+    enabled: true
+
+# ---- Collector --------------------------------------------------------------
+collector:
+  replicaCount: 1
+  config:
+    LOG_LEVEL: info
+    PORT: "8083"
+    MQ_BASE_URL: http://prompted-mqreader:8085
+    COLLECTOR_ID: collector-0
+    LEASE_SECONDS: "30"
+    LEASE_MAX: "100"
+    POLL_INTERVAL_MS: "1000"
+  secret:
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+  autoscaling:
+    enabled: false

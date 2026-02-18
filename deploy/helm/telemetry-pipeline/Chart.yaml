@@ -1,10 +1,12 @@
 apiVersion: v2
-name: prompted
-description: Umbrella Helm chart for the prompted Go monorepo
+name: telemetry-pipeline
+description: Umbrella Helm chart – installs all GPU telemetry pipeline components
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+
 dependencies:
+  # ---- Application services ----
   - name: apigw
     version: "0.1.0"
     repository: "file://../apigw"
@@ -20,3 +22,8 @@ dependencies:
   - name: collector
     version: "0.1.0"
     repository: "file://../collector"
+
+  # ---- Infrastructure ----
+  - name: postgresql-ha
+    version: "16.3.2"
+    repository: "https://charts.bitnami.com/bitnami"

@@ -17,11 +17,13 @@ resources:
     memory: 128Mi
     cpu: 100m
 
-env:
+config:
   LOG_LEVEL: info
   PORT: "8085"
-  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable
   READER_PARTITION_START: "0"
   READER_PARTITION_END: "255"
-  READER_POLL_INTERVAL: 500ms
+  READER_POLL_INTERVAL: "500ms"
   READER_POLL_BATCH: "1000"
+
+secret:
+  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable

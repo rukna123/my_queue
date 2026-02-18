@@ -1,5 +1,5 @@
 apiVersion: v2
-name: prompted-mqreader
-description: Helm chart for the prompted MQ reader service
+name: mqreader
+description: MQ reader – serves lease/ack from in-memory partition store
 version: 0.1.0
 appVersion: "0.1.0"

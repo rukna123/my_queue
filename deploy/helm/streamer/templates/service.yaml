@@ -1,10 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "prompted-streamer.fullname" . }}
+  name: {{ include "streamer.fullname" . }}
   labels:
-    app.kubernetes.io/name: prompted-streamer
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "streamer.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -13,5 +12,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: prompted-streamer
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "streamer.selectorLabels" . | nindent 4 }}

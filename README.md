@@ -303,6 +303,101 @@ Persisted GPU telemetry entries written by the collector.
 
 **Indexes**: `UNIQUE(uuid)`, `(gpu_id, timestamp)`.
 
+## Kubernetes Deployment (Helm)
+
+The entire pipeline can be deployed to any Kubernetes cluster using the `telemetry-pipeline` umbrella Helm chart. It installs all five services plus a Bitnami PostgreSQL-HA cluster.
+
+### Prerequisites
+
+- Kubernetes cluster (Minikube, kind, EKS, GKE, etc.)
+- [Helm 3](https://helm.sh/docs/intro/install/)
+- Docker images built and available to the cluster
+
+### Build images (Minikube example)
+
+```bash
+# Point Docker at Minikube's daemon
+eval $(minikube docker-env)
+
+# Build all service images
+make docker-build
+```
+
+### Install
+
+```bash
+cd deploy/helm/telemetry-pipeline
+
+# Pull the postgresql-ha dependency
+helm dependency update .
+
+# Install the full stack
+helm install prompted .
+```
+
+### Verify
+
+```bash
+# Check all pods are running
+kubectl get pods
+
+# Port-forward the API gateway to localhost
+kubectl port-forward svc/prompted-apigw 8080:8080
+
+# In another terminal — list GPUs
+curl http://localhost:8080/api/v1/gpus
+
+# Telemetry for a specific GPU
+curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry'
+
+# Swagger UI
+open http://localhost:8080/swagger/index.html
+```
+
+### Override values
+
+```bash
+# Scale mqwriter to 3 replicas with autoscaling
+helm install prompted . \
+  --set mqwriter.replicaCount=3 \
+  --set mqwriter.autoscaling.enabled=true
+
+# Use a custom DB password
+helm install prompted . \
+  --set postgresql-ha.postgresql.password=my-secret-pw \
+  --set apigw.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable" \
+  --set mqwriter.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable" \
+  --set mqreader.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable" \
+  --set collector.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable"
+```
+
+### Uninstall
+
+```bash
+helm uninstall prompted
+```
+
+### Helm Chart Structure
+
+```
+deploy/helm/
+├── apigw/                  # API gateway chart
+├── mqwriter/               # MQ writer chart (includes HPA template)
+├── mqreader/               # MQ reader chart
+├── streamer/               # Streamer chart (includes CSV ConfigMap)
+├── collector/              # Collector chart (includes HPA template)
+└── telemetry-pipeline/     # Umbrella chart (installs all + PostgreSQL-HA)
+```
+
+Each service chart includes:
+- `configmap.yaml` — non-sensitive env vars (LOG_LEVEL, PORT, etc.)
+- `secret.yaml` — sensitive env vars (DATABASE_URL)
+- `deployment.yaml` — with liveness/readiness probes, resource limits
+- `service.yaml` — ClusterIP service
+- `hpa.yaml` — optional CPU-based HPA (mqwriter, collector)
+
+The streamer chart additionally includes `configmap-csv.yaml` which embeds the sample CSV data. To use an external volume instead, set `csv.enabled=false` and `pvc.enabled=true` in the streamer values.
+
 ## Health Endpoints
 
 Every service exposes:

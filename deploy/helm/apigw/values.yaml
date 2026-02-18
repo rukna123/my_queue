@@ -12,11 +12,22 @@ service:
 resources:
   limits:
     memory: 128Mi
-    cpu: 100m
+    cpu: 200m
   requests:
     memory: 64Mi
     cpu: 50m
 
-env:
+# Non-sensitive configuration (stored in ConfigMap)
+config:
   LOG_LEVEL: info
-  DATABASE_URL: postgres://prompted:prompted@postgres:5432/prompted?sslmode=disable
+  PORT: "8080"
+
+# Sensitive configuration (stored in Secret)
+secret:
+  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
