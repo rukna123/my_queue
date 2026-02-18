@@ -25,5 +25,5 @@ dependencies:
 
   # ---- Infrastructure ----
   - name: postgresql
-    version: "16.3.2"
+    version: "*"
     repository: "https://charts.bitnami.com/bitnami"
