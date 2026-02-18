@@ -28,7 +28,8 @@ config:
 # ---- CSV Data Source ----
 # Option 1 (default): Embed CSV data in a ConfigMap.
 #   Set csv.enabled=true and provide csv.data below.
-#   The ConfigMap is mounted read-only at csv.mountPath.
+#   An init container copies the ConfigMap into a writable emptyDir
+#   at /data so the streamer can update timestamps on disk.
 #
 # Option 2: Use an external PersistentVolumeClaim.
 #   Set csv.enabled=false and pvc.enabled=true.
@@ -36,8 +37,6 @@ config:
 #   The PVC is mounted at the path set in config.STREAMER_CSV_PATH.
 csv:
   enabled: true
-  mountPath: /data/telemetry.csv
-  subPath: telemetry.csv
   data: |
     timestamp,metric_name,gpu_id,device,uuid,model_name,hostname,container,pod,namespace,value,labels_raw
     2024-06-01T12:00:00Z,gpu_utilization,GPU-0a1b2c3d,nvidia0,550e8400-e29b-41d4-a716-446655440001,NVIDIA A100-SXM4-80GB,node-01,train-worker,train-pod-0,ml-prod,87.3,"job=llm-finetune,team=ml-platform"
