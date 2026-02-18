@@ -328,7 +328,7 @@ make docker-build
 ```bash
 cd deploy/helm/telemetry-pipeline
 
-# Pull the postgresql-ha dependency
+# Pull the postgresql dependency
 helm dependency update .
 
 # Install the full stack
@@ -364,11 +364,11 @@ helm install prompted . \
 
 # Use a custom DB password
 helm install prompted . \
-  --set postgresql-ha.postgresql.password=my-secret-pw \
-  --set apigw.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable" \
-  --set mqwriter.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable" \
-  --set mqreader.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable" \
-  --set collector.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable"
+  --set postgresql.auth.password=my-secret-pw \
+  --set apigw.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable" \
+  --set mqwriter.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable" \
+  --set mqreader.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable" \
+  --set collector.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable"
 ```
 
 ### Uninstall

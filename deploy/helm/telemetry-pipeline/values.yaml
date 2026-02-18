@@ -1,22 +1,20 @@
 # =============================================================================
-# Telemetry Pipeline – Umbrella Values
+# Telemetry Pipeline - Umbrella Values
 # =============================================================================
 # Override any sub-chart value by nesting under the chart name.
-# All DATABASE_URL values below point to the postgresql-ha Pgpool service
-# created by this chart: <release>-postgresql-ha-pgpool:5432
+# All DATABASE_URL values point to the simple postgresql service:
+#   <release>-postgresql:5432
 # =============================================================================
 
-# ---- PostgreSQL HA (Bitnami) ------------------------------------------------
-postgresql-ha:
-  postgresql:
+# ---- PostgreSQL (Bitnami) ---------------------------------------------------
+postgresql:
+  auth:
     database: prompted
     username: prompted
     password: prompted
-    repmgrPassword: repmgr-secret
-  pgpool:
-    adminPassword: pgpool-admin-secret
-  persistence:
-    size: 8Gi
+  primary:
+    persistence:
+      size: 2Gi
 
 # ---- API Gateway ------------------------------------------------------------
 apigw:
@@ -25,7 +23,7 @@ apigw:
     LOG_LEVEL: info
     PORT: "8080"
   secret:
-    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
   autoscaling:
     enabled: false
 
@@ -39,7 +37,7 @@ mqwriter:
     MQ_BUFFER_SIZE: "500"
     MQ_FLUSH_INTERVAL: "500ms"
   secret:
-    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
   autoscaling:
     enabled: false
 
@@ -54,7 +52,7 @@ mqreader:
     READER_POLL_INTERVAL: "500ms"
     READER_POLL_BATCH: "1000"
   secret:
-    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
 
 # ---- Streamer ---------------------------------------------------------------
 streamer:
@@ -81,6 +79,6 @@ collector:
     LEASE_MAX: "100"
     POLL_INTERVAL_MS: "1000"
   secret:
-    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+    DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
   autoscaling:
     enabled: false

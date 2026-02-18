@@ -27,7 +27,7 @@ config:
   POLL_INTERVAL_MS: "1000"
 
 secret:
-  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
 
 autoscaling:
   enabled: false

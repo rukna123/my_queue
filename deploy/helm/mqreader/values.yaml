@@ -26,4 +26,4 @@ config:
   READER_POLL_BATCH: "1000"
 
 secret:
-  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql-ha-pgpool:5432/prompted?sslmode=disable
+  DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
