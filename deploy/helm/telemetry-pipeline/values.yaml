@@ -54,6 +54,8 @@ mqreader:
     READER_POLL_BATCH: "1000"
   secret:
     DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
+  autoscaling:
+    enabled: true
 
 # ---- Partition Controller ---------------------------------------------------
 partition-controller:

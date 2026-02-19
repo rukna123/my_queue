@@ -29,3 +29,9 @@ config:
 
 secret:
   DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

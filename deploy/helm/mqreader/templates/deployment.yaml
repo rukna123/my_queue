@@ -6,7 +6,9 @@ metadata:
     {{- include "mqreader.labels" . | nindent 4 }}
 spec:
   serviceName: {{ include "mqreader.fullname" . }}-headless
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   podManagementPolicy: Parallel
   selector:
     matchLabels:
