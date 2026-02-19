@@ -70,6 +70,7 @@ func main() {
 
 	r.Post("/v1/publish", h.Publish)
 	r.Get("/metrics/buffer", h.MetricsHandler)
+	r.Get("/metrics", h.PrometheusMetrics)
 
 	srv := &http.Server{
 		Addr:         cfg.Addr(),

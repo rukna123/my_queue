@@ -110,11 +110,20 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, PublishResponse{Accepted: accepted, Duplicates: dupes})
 }
 
-// MetricsHandler returns buffer utilization as a simple JSON payload for HPA.
+// MetricsHandler returns buffer utilization as a simple JSON payload.
 func (h *Handler) MetricsHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]float64{
 		"buffer_utilization": h.buffer.BufferUtilization(),
 	})
+}
+
+// PrometheusMetrics returns buffer utilization in Prometheus text exposition format.
+func (h *Handler) PrometheusMetrics(w http.ResponseWriter, _ *http.Request) {
+	util := h.buffer.BufferUtilization()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "# HELP mqwriter_buffer_utilization Ratio of pending items in write buffer (0.0-1.0)\n")
+	fmt.Fprintf(w, "# TYPE mqwriter_buffer_utilization gauge\n")
+	fmt.Fprintf(w, "mqwriter_buffer_utilization %f\n", util)
 }
 
 // ---------------------------------------------------------------------------
