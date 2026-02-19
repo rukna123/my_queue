@@ -62,6 +62,7 @@ type Partition struct {
 	leaseCh   chan leaseCmd
 	ackCh     chan ackCmd
 	utilCh    chan chan float64
+	drainCh   chan chan struct{}
 }
 
 // NewPartition creates a Partition for the given virtual-partition range.
@@ -74,6 +75,7 @@ func NewPartition(store *Store, partStart, partEnd int, _ time.Duration, batchSi
 		leaseCh:   make(chan leaseCmd, 16),
 		ackCh:     make(chan ackCmd, 16),
 		utilCh:    make(chan chan float64, 4),
+		drainCh:   make(chan chan struct{}, 1),
 	}
 }
 
@@ -91,6 +93,22 @@ func (p *Partition) BufferUtilization(ctx context.Context) float64 {
 		return v
 	case <-ctx.Done():
 		return 0
+	}
+}
+
+// Drain signals the owner goroutine to stop serving new leases, wait for all
+// outstanding served batches to be acked or expired, flush pending deletes,
+// and then return.  Blocks until draining is complete or ctx expires.
+func (p *Partition) Drain(ctx context.Context) {
+	done := make(chan struct{})
+	select {
+	case p.drainCh <- done:
+	case <-ctx.Done():
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 
@@ -225,9 +243,34 @@ func (p *Partition) Run(ctx context.Context) {
 	expireTicker := time.NewTicker(1 * time.Second)
 	defer expireTicker.Stop()
 
+	// draining is set when a Drain() call is received; drainDone is closed
+	// once the served map is empty and pending deletes are flushed.
+	var drainDone chan struct{}
+	draining := false
+
+	// flushDone is called when draining and the served map becomes empty.
+	flushDone := func() {
+		if len(doneIDs) > 0 {
+			deleted, err := p.store.DeleteByIDs(ctx, doneIDs)
+			if err != nil {
+				slog.Error("drain: batch delete failed", "error", err)
+			} else {
+				slog.Info("drain: batch deleted from DB", "deleted", deleted)
+			}
+			doneIDs = doneIDs[:0]
+		}
+		slog.Info("drain complete")
+		close(drainDone)
+	}
+
 	for {
 		select {
 		case cmd := <-p.leaseCh:
+			if draining {
+				cmd.reply <- LeaseResult{LeaseID: uuid.New().String(), Messages: []LeasedMsg{}}
+				continue
+			}
+
 			// If buffer is empty and nothing outstanding, try refilling now.
 			if len(buffer) == 0 && len(served) == 0 {
 				refill()
@@ -304,11 +347,27 @@ func (p *Partition) Run(ctx context.Context) {
 
 			cmd.reply <- AckResult{Acked: acked}
 
+			if draining && len(served) == 0 {
+				flushDone()
+				return
+			}
+
 		case reply := <-p.utilCh:
 			if p.batchSize > 0 {
 				reply <- float64(len(buffer)) / float64(p.batchSize)
 			} else {
 				reply <- 0
+			}
+
+		case done := <-p.drainCh:
+			draining = true
+			drainDone = done
+			buffer = buffer[:0]
+			slog.Info("drain requested", "outstanding_leases", len(served))
+
+			if len(served) == 0 {
+				flushDone()
+				return
 			}
 
 		case <-expireTicker.C:
@@ -321,6 +380,11 @@ func (p *Partition) Run(ctx context.Context) {
 					)
 					delete(served, leaseID)
 				}
+			}
+
+			if draining && len(served) == 0 {
+				flushDone()
+				return
 			}
 
 		case <-ctx.Done():

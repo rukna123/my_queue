@@ -114,14 +114,22 @@ func main() {
 		slog.Error("server error", "error", err)
 	}
 
-	// Stop accepting requests.
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// 1. Stop accepting new HTTP requests.
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
-		slog.Error("shutdown error", "error", err)
+		slog.Error("http shutdown error", "error", err)
 	}
+	slog.Info("http server stopped, draining in-flight messages")
 
-	// Stop the partition goroutine.
+	// 2. Drain in-flight messages: wait for outstanding served batches to be
+	//    acked or expired, then flush pending deletes.  Unacked messages stay
+	//    in the DB for the new partition owner to pick up.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer drainCancel()
+	part.Drain(drainCtx)
+
+	// 3. Stop the partition goroutine.
 	cancel()
 	slog.Info("mqreader stopped")
 }

@@ -415,6 +415,16 @@ The **partition-controller** watches the mqreader StatefulSet. When you scale mq
 
 The controller uses Lease-based leader election so you can run multiple replicas for HA.
 
+**Graceful drain on partition reassignment**: When the partition-controller triggers a rolling restart, each mqreader pod receives SIGTERM and executes a graceful shutdown:
+
+1. Stops accepting new HTTP requests (server shutdown)
+2. Stops serving new leases (returns empty responses)
+3. Waits up to 30 seconds for outstanding served batches to be acked or expired
+4. Batch-deletes all completed (acked) message IDs from the DB
+5. Any unacked messages remain in the DB — the new partition owner will pick them up on its next refill
+
+The collector's `ON CONFLICT (uuid) DO NOTHING` ensures that any messages delivered by both the old and new owner are deduplicated at the telemetry table level.
+
 **Backward compatibility**: When running outside Kubernetes (docker-compose, host mode), mqreader falls back to reading `READER_PARTITION_START` / `READER_PARTITION_END` from environment variables.
 
 ## Health Endpoints
