@@ -59,8 +59,9 @@ type Partition struct {
 	partEnd   int
 	batchSize int
 
-	leaseCh chan leaseCmd
-	ackCh   chan ackCmd
+	leaseCh   chan leaseCmd
+	ackCh     chan ackCmd
+	utilCh    chan chan float64
 }
 
 // NewPartition creates a Partition for the given virtual-partition range.
@@ -72,6 +73,24 @@ func NewPartition(store *Store, partStart, partEnd int, _ time.Duration, batchSi
 		batchSize: batchSize,
 		leaseCh:   make(chan leaseCmd, 16),
 		ackCh:     make(chan ackCmd, 16),
+		utilCh:    make(chan chan float64, 4),
+	}
+}
+
+// BufferUtilization queries the owner goroutine for the current buffer
+// utilization ratio (0.0–1.0).  Safe to call from any goroutine.
+func (p *Partition) BufferUtilization(ctx context.Context) float64 {
+	reply := make(chan float64, 1)
+	select {
+	case p.utilCh <- reply:
+	case <-ctx.Done():
+		return 0
+	}
+	select {
+	case v := <-reply:
+		return v
+	case <-ctx.Done():
+		return 0
 	}
 }
 
@@ -284,6 +303,13 @@ func (p *Partition) Run(ctx context.Context) {
 			}
 
 			cmd.reply <- AckResult{Acked: acked}
+
+		case reply := <-p.utilCh:
+			if p.batchSize > 0 {
+				reply <- float64(len(buffer)) / float64(p.batchSize)
+			} else {
+				reply <- 0
+			}
 
 		case <-expireTicker.C:
 			now := time.Now()

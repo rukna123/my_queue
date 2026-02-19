@@ -2,6 +2,7 @@ package mqreader
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -171,6 +172,15 @@ func (h *Handler) Ack(w http.ResponseWriter, r *http.Request) {
 	)
 
 	writeJSON(w, http.StatusOK, AckResponse{Acked: result.Acked})
+}
+
+// PrometheusMetrics returns buffer utilization in Prometheus text exposition format.
+func (h *Handler) PrometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	util := h.partition.BufferUtilization(r.Context())
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "# HELP mqreader_buffer_utilization Ratio of buffered messages to batch size (0.0-1.0)\n")
+	fmt.Fprintf(w, "# TYPE mqreader_buffer_utilization gauge\n")
+	fmt.Fprintf(w, "mqreader_buffer_utilization %f\n", util)
 }
 
 // ---------------------------------------------------------------------------

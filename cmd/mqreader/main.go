@@ -84,6 +84,8 @@ func main() {
 		r.Post("/ack", h.Ack)
 	})
 
+	r.Get("/metrics", h.PrometheusMetrics)
+
 	srv := &http.Server{
 		Addr:         cfg.Addr(),
 		Handler:      r,
