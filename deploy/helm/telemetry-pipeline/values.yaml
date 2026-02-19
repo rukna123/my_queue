@@ -39,7 +39,7 @@ mqwriter:
   secret:
     DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
   autoscaling:
-    enabled: false
+    enabled: true
 
 # ---- MQ Reader --------------------------------------------------------------
 mqreader:
@@ -56,7 +56,7 @@ mqreader:
 
 # ---- Streamer ---------------------------------------------------------------
 streamer:
-  replicaCount: 1
+  replicaCount: 10
   config:
     LOG_LEVEL: info
     PORT: "8082"
