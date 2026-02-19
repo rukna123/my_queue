@@ -81,7 +81,7 @@ streamer:
 
 # ---- Collector --------------------------------------------------------------
 collector:
-  replicaCount: 1
+  replicaCount: 10
   config:
     LOG_LEVEL: info
     PORT: "8083"
