@@ -1,11 +1,13 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "mqreader.fullname" . }}
   labels:
     {{- include "mqreader.labels" . | nindent 4 }}
 spec:
+  serviceName: {{ include "mqreader.fullname" . }}-headless
   replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       {{- include "mqreader.selectorLabels" . | nindent 6 }}
@@ -22,11 +24,20 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           envFrom:
             - configMapRef:
                 name: {{ include "mqreader.fullname" . }}
             - secretRef:
                 name: {{ include "mqreader.fullname" . }}
+          volumeMounts:
+            - name: partitions
+              mountPath: /etc/mqreader
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /healthz
@@ -45,3 +56,7 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: partitions
+          configMap:
+            name: {{ include "mqreader.fullname" . }}-partitions

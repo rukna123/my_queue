@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"gopkg.in/yaml.v2"
 
 	"github.com/prompted/prompted/internal/config"
 	"github.com/prompted/prompted/internal/db"
@@ -22,12 +25,20 @@ import (
 	"github.com/prompted/prompted/internal/mqreader"
 )
 
+const partitionFile = "/etc/mqreader/partitions.yaml"
+
 func main() {
 	cfg := config.LoadMQReader()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: cfg.SlogLevel(),
 	})))
+
+	// Try loading partition range from the ConfigMap-mounted file.
+	// Falls back to env-based READER_PARTITION_START / READER_PARTITION_END.
+	partStart, partEnd := loadPartitionRange(cfg.PartitionStart, cfg.PartitionEnd)
+	cfg.PartitionStart = partStart
+	cfg.PartitionEnd = partEnd
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer connCancel()
@@ -111,6 +122,66 @@ func main() {
 	// Stop the partition goroutine.
 	cancel()
 	slog.Info("mqreader stopped")
+}
+
+// loadPartitionRange reads the partition assignment from the ConfigMap-mounted
+// file at /etc/mqreader/partitions.yaml.  If the file doesn't exist (e.g.
+// running locally or in docker-compose), it falls back to the env-derived
+// defaults.
+func loadPartitionRange(envStart, envEnd int) (int, int) {
+	data, err := os.ReadFile(partitionFile)
+	if err != nil {
+		slog.Info("partition file not found, using env vars",
+			"path", partitionFile,
+			"start", envStart,
+			"end", envEnd,
+		)
+		return envStart, envEnd
+	}
+
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		podName, _ = os.Hostname()
+	}
+
+	var partitions map[string]string
+	if err := yaml.Unmarshal(data, &partitions); err != nil {
+		slog.Error("failed to parse partition file, falling back to env vars",
+			"path", partitionFile,
+			"error", err,
+		)
+		return envStart, envEnd
+	}
+
+	rangeStr, ok := partitions[podName]
+	if !ok {
+		slog.Error("pod not found in partition map, falling back to env vars",
+			"pod_name", podName,
+			"available", partitions,
+		)
+		return envStart, envEnd
+	}
+
+	parts := strings.SplitN(rangeStr, "-", 2)
+	if len(parts) != 2 {
+		slog.Error("invalid partition range format", "pod_name", podName, "range", rangeStr)
+		return envStart, envEnd
+	}
+
+	start, err1 := strconv.Atoi(parts[0])
+	end, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		slog.Error("invalid partition range values", "pod_name", podName, "range", rangeStr)
+		return envStart, envEnd
+	}
+
+	slog.Info("loaded partition range from file",
+		"path", partitionFile,
+		"pod_name", podName,
+		"start", start,
+		"end", end,
+	)
+	return start, end
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

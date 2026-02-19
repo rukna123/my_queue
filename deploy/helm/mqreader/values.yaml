@@ -17,6 +17,8 @@ resources:
     memory: 128Mi
     cpu: 100m
 
+totalPartitions: 256
+
 config:
   LOG_LEVEL: info
   PORT: "8085"

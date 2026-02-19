@@ -92,7 +92,8 @@ make run-apigw       # :8080
 ```
 
 - **MQWriter** – receives raw telemetry JSON, generates `msg_uuid`, computes `partition_key = FNV-1a(gpu_id) % 256`, buffers in memory, flushes to Postgres asynchronously. Exposes `GET /metrics/buffer` for HPA autoscaling.
-- **MQReader** – each pod owns a range of 256 virtual partitions, polls Postgres for its partition's rows into memory, serves `POST /v1/lease` and `POST /v1/ack` from the in-memory store. No contention between pods.
+- **MQReader** – deployed as a StatefulSet. Each pod owns a range of 256 virtual partitions (assigned via a ConfigMap), polls Postgres for its partition's rows into memory, serves `POST /v1/lease` and `POST /v1/ack` from the in-memory store. No contention between pods. Partition ranges are automatically redistributed when the replica count changes.
+- **Partition Controller** – a Kubernetes controller that watches the mqreader StatefulSet. When `spec.replicas` changes, it recomputes partition ranges (256 / N), updates the `mqreader-partitions` ConfigMap, and triggers a rolling restart of the StatefulSet. Uses leader election for HA.
 - **Streamer** – reads a CSV file, stamps `time.Now().UTC()` on each row, writes timestamps back to disk, publishes each row as a single message to mqwriter.
 - **Collector** – polls mqreader for leased messages, parses payloads, inserts into the `telemetry` table with `ON CONFLICT (uuid) DO NOTHING` for idempotency, acks the lease only on full success. Uses the mqwriter-generated `msg_uuid` as the dedup key.
 - **API Gateway** – public-facing HTTP API serving GPU telemetry queries. Exposes `GET /api/v1/gpus` and `GET /api/v1/gpus/{id}/telemetry` (with optional RFC3339 time filters). Auto-generated OpenAPI docs served at `/swagger/`.
@@ -102,11 +103,12 @@ make run-apigw       # :8080
 ```
 prompted/
 ├── cmd/
-│   ├── apigw/          # API gateway service
-│   ├── mqwriter/       # MQ write-side service
-│   ├── mqreader/       # MQ read-side service
-│   ├── streamer/       # CSV telemetry streamer
-│   └── collector/      # Telemetry collector/persister
+│   ├── apigw/                  # API gateway service
+│   ├── mqwriter/               # MQ write-side service
+│   ├── mqreader/               # MQ read-side service (StatefulSet)
+│   ├── streamer/               # CSV telemetry streamer
+│   ├── collector/              # Telemetry collector/persister
+│   └── partition-controller/   # K8s controller for mqreader partitions
 ├── internal/
 │   ├── config/         # Env-based configuration loader
 │   ├── db/             # Database connection & migration helpers
@@ -196,8 +198,9 @@ All services read configuration from environment variables. See `.env.example` f
 | `MQ_PARTITION_COUNT` | `256` | mqwriter | Total virtual partitions |
 | `MQ_BUFFER_SIZE` | `500` | mqwriter | Buffer flush threshold (messages) |
 | `MQ_FLUSH_INTERVAL` | `500ms` | mqwriter | Buffer flush timer |
-| `READER_PARTITION_START` | `0` | mqreader | First owned partition |
-| `READER_PARTITION_END` | `255` | mqreader | Last owned partition |
+| `READER_PARTITION_START` | `0` | mqreader | First owned partition (fallback when no ConfigMap) |
+| `READER_PARTITION_END` | `255` | mqreader | Last owned partition (fallback when no ConfigMap) |
+| `POD_NAME` | hostname | mqreader | Pod identity for partition lookup (set via fieldRef) |
 | `READER_POLL_INTERVAL` | `500ms` | mqreader | DB poll frequency |
 | `READER_POLL_BATCH` | `1000` | mqreader | Max rows per poll |
 | `STREAMER_CSV_PATH` | `samples/telemetry.csv` | streamer | CSV file path |
@@ -381,12 +384,13 @@ helm uninstall prompted
 
 ```
 deploy/helm/
-├── apigw/                  # API gateway chart
-├── mqwriter/               # MQ writer chart (includes HPA template)
-├── mqreader/               # MQ reader chart
-├── streamer/               # Streamer chart (includes CSV ConfigMap)
-├── collector/              # Collector chart (includes HPA template)
-└── telemetry-pipeline/     # Umbrella chart (installs all + PostgreSQL-HA)
+├── apigw/                      # API gateway chart
+├── mqwriter/                   # MQ writer chart (includes HPA template)
+├── mqreader/                   # MQ reader chart (StatefulSet + partitions ConfigMap)
+├── streamer/                   # Streamer chart (includes CSV ConfigMap)
+├── collector/                  # Collector chart (includes HPA template)
+├── partition-controller/       # Partition redistribution controller chart
+└── telemetry-pipeline/         # Umbrella chart (installs all + PostgreSQL)
 ```
 
 Each service chart includes:
@@ -397,6 +401,21 @@ Each service chart includes:
 - `hpa.yaml` — optional CPU-based HPA (mqwriter, collector)
 
 The streamer chart additionally includes `configmap-csv.yaml` which embeds the sample CSV data. To use an external volume instead, set `csv.enabled=false` and `pvc.enabled=true` in the streamer values.
+
+### MQReader StatefulSet & Partition Controller
+
+**mqreader** runs as a StatefulSet (not a Deployment) so that each pod has a stable identity (`mqreader-0`, `mqreader-1`, etc.). Partition ranges are stored in a ConfigMap (`mqreader-partitions`) and mounted at `/etc/mqreader/partitions.yaml`. Each pod reads its own range on startup based on its hostname.
+
+The **partition-controller** watches the mqreader StatefulSet. When you scale mqreader (e.g. `kubectl scale statefulset prompted-mqreader --replicas=3`), the controller:
+
+1. Detects the replica count change
+2. Recomputes partition ranges: 256 partitions / N pods, last pod gets remainder
+3. Updates the `mqreader-partitions` ConfigMap
+4. Patches a restart annotation to trigger a rolling restart
+
+The controller uses Lease-based leader election so you can run multiple replicas for HA.
+
+**Backward compatibility**: When running outside Kubernetes (docker-compose, host mode), mqreader falls back to reading `READER_PARTITION_START` / `READER_PARTITION_END` from environment variables.
 
 ## Health Endpoints
 

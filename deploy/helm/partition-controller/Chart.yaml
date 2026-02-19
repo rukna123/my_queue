@@ -1,0 +1,5 @@
+apiVersion: v2
+name: partition-controller
+description: Kubernetes controller that redistributes mqreader partition ranges on scale events
+version: 0.1.0
+appVersion: "0.1.0"

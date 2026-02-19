@@ -1,4 +1,4 @@
-{{- define "mqreader.fullname" -}}
+{{- define "partition-controller.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -11,29 +11,14 @@
 {{- end }}
 {{- end }}
 
-{{- define "mqreader.labels" -}}
+{{- define "partition-controller.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{- define "mqreader.selectorLabels" -}}
+{{- define "partition-controller.selectorLabels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
-
-{{- define "mqreader.partitionData" -}}
-{{- $fullname := include "mqreader.fullname" . }}
-{{- $replicas := int .Values.replicaCount }}
-{{- $total := int .Values.totalPartitions }}
-{{- $perPod := div $total $replicas }}
-{{- range $i := until $replicas }}
-{{- $start := mul $i $perPod }}
-{{- if eq $i (sub $replicas 1) }}
-{{ $fullname }}-{{ $i }}: "{{ $start }}-{{ sub $total 1 }}"
-{{- else }}
-{{ $fullname }}-{{ $i }}: "{{ $start }}-{{ sub (add $start $perPod) 1 }}"
-{{- end }}
-{{- end }}
 {{- end }}

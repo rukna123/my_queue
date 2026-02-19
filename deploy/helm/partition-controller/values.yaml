@@ -1,0 +1,25 @@
+replicaCount: 1
+
+image:
+  repository: prompted-partition-controller
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8090
+
+resources:
+  limits:
+    memory: 128Mi
+    cpu: 100m
+  requests:
+    memory: 64Mi
+    cpu: 50m
+
+config:
+  NAMESPACE: default
+  STATEFULSET_NAME: prompted-mqreader
+  CONFIGMAP_NAME: prompted-mqreader-partitions
+  TOTAL_PARTITIONS: "256"
+  PORT: "8090"
