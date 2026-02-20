@@ -212,9 +212,9 @@ func processOnce(ctx context.Context, cfg config.Collector, store Persister, mq 
 			// Skip unparseable messages but continue with the rest.
 			continue
 		}
-		// Override the payload's uuid with the mqwriter-generated msg_uuid.
-		// This is the single authoritative dedup key for the telemetry table.
-		row.UUID = msg.MsgUUID
+		// Set MsgUUID from the mqwriter-generated dedup key.
+		// row.UUID retains the original GPU UUID from the CSV payload.
+		row.MsgUUID = msg.MsgUUID
 		rows = append(rows, row)
 	}
 

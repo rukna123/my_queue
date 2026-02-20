@@ -10,8 +10,11 @@ import (
 )
 
 // TelemetryRow is parsed from a leased message payload.
+// UUID is the original GPU UUID from the CSV.
+// MsgUUID is the mqwriter-generated dedup key.
 type TelemetryRow struct {
 	UUID       string    `json:"uuid"`
+	MsgUUID    string    `json:"-"`
 	GPUID      string    `json:"gpu_id"`
 	MetricName string    `json:"metric_name"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -58,14 +61,15 @@ func (s *Store) PersistBatch(ctx context.Context, rows []TelemetryRow) (persiste
 	defer stmt.Close()
 
 	for _, row := range rows {
-		parsed, err := uuid.Parse(row.UUID)
+		parsedMsgUUID, err := uuid.Parse(row.MsgUUID)
 		if err != nil {
-			return 0, 0, fmt.Errorf("invalid uuid %q: %w", row.UUID, err)
+			return 0, 0, fmt.Errorf("invalid msg_uuid %q: %w", row.MsgUUID, err)
 		}
 
 		var ok bool
 		err = stmt.QueryRowContext(ctx,
-			parsed,
+			nullStr(row.UUID),
+			parsedMsgUUID,
 			row.GPUID,
 			row.MetricName,
 			row.Timestamp,
@@ -83,7 +87,7 @@ func (s *Store) PersistBatch(ctx context.Context, rows []TelemetryRow) (persiste
 		case err == sql.ErrNoRows:
 			duplicates++
 		case err != nil:
-			return 0, 0, fmt.Errorf("insert uuid %s: %w", row.UUID, err)
+			return 0, 0, fmt.Errorf("insert msg_uuid %s: %w", row.MsgUUID, err)
 		default:
 			persisted++
 		}
