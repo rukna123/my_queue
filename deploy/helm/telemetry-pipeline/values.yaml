@@ -77,7 +77,7 @@ streamer:
     STREAMER_INTERVAL_MS: "1000"
     STREAMER_CHANNEL_BUFFER: "16"
   csv:
-    enabled: true
+    enabled: false
 
 # ---- Collector --------------------------------------------------------------
 collector:

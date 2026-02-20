@@ -26,13 +26,14 @@ config:
   STREAMER_CHANNEL_BUFFER: "16"
 
 # ---- CSV Data Source ----
-# The CSV file is read from deploy/helm/streamer/files/telemetry.csv at
-# chart render time via .Files.Get — no need to paste data into values.yaml.
-# To update the CSV, replace files/telemetry.csv and helm upgrade.
+# The CSV is baked into the Docker image at /data/telemetry.csv (see Dockerfile).
+# To update: replace deploy/helm/streamer/files/telemetry.csv, rebuild the image,
+# and helm upgrade.
 #
-# For PVC-based mounting, set csv.enabled=false and pvc.enabled=true.
+# Set csv.enabled=true only for small CSVs (<1MB) that fit in a ConfigMap.
+# For PVC-based mounting, set pvc.enabled=true.
 csv:
-  enabled: true
+  enabled: false
   mountPath: /data/telemetry.csv
   subPath: telemetry.csv
 

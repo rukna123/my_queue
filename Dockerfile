@@ -18,5 +18,6 @@ RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /app /app
 COPY migrations /migrations
 COPY samples /samples
+COPY deploy/helm/streamer/files/telemetry.csv /data/telemetry.csv
 
 ENTRYPOINT ["/app"]
