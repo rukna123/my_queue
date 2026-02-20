@@ -7,5 +7,5 @@ metadata:
     {{- include "streamer.labels" . | nindent 4 }}
 data:
   telemetry.csv: |
-{{ .Values.csv.data | indent 4 }}
+{{ .Files.Get "files/telemetry.csv" | indent 4 }}
 {{- end }}

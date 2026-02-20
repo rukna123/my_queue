@@ -116,7 +116,7 @@ services:
       STREAMER_INTERVAL_MS: "1000"
       STREAMER_CHANNEL_BUFFER: "16"
     volumes:
-      - ./samples:/data
+      - ./deploy/helm/streamer/files:/data
 
   # ---------------------------------------------------------------------------
   # Collector  –  leases from mqreader, persists to telemetry table
