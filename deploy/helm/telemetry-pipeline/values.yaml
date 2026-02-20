@@ -68,7 +68,7 @@ partition-controller:
 
 # ---- Streamer ---------------------------------------------------------------
 streamer:
-  replicaCount: 10
+  replicaCount: 1
   config:
     LOG_LEVEL: info
     PORT: "8082"
@@ -81,7 +81,7 @@ streamer:
 
 # ---- Collector --------------------------------------------------------------
 collector:
-  replicaCount: 10
+  replicaCount: 1
   config:
     LOG_LEVEL: info
     PORT: "8083"
