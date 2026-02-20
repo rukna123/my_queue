@@ -23,11 +23,11 @@ Wait ~15 seconds for data to flow through the pipeline, then verify:
 # List GPUs
 curl http://localhost:8080/api/v1/gpus
 
-# Telemetry for a specific GPU
-curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry'
+# Telemetry for a specific GPU (use a UUID from the list above)
+curl 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry'
 
 # Telemetry with time window
-curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
+curl 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
 
 # Health check all services
 make verify
@@ -161,22 +161,22 @@ After `make up`, wait ~15 seconds, then run:
 # 1. Check all services are healthy
 make verify
 
-# 2. List GPUs (should show 3 GPU IDs from the sample CSV)
+# 2. List GPUs (returns GPU hardware UUIDs from the CSV)
 curl -s http://localhost:8080/api/v1/gpus | python3 -m json.tool
 # {
 #     "gpus": [
-#         {"id": "GPU-0a1b2c3d"},
-#         {"id": "GPU-5e6f7a8b"},
-#         {"id": "GPU-c9d0e1f2"}
+#         {"id": "GPU-5fd4f087-86f3-7a43-b711-4771313afc50"},
+#         {"id": "GPU-62120fe8-5a35-8f20-4b1e-936e7086efc1"},
+#         ...
 #     ]
 # }
 
-# 3. Get telemetry for a GPU
-curl -s 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry' | python3 -m json.tool
+# 3. Get telemetry for a GPU (use a UUID from the list above)
+curl -s 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry' | python3 -m json.tool
 # Returns entries with recent timestamps (streamer stamps time.Now())
 
 # 4. Filter by time window (RFC3339)
-curl -s 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2026-02-15T00:00:00Z&end_time=2026-02-16T00:00:00Z' | python3 -m json.tool
+curl -s 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry?start_time=2026-02-15T00:00:00Z&end_time=2026-02-16T00:00:00Z' | python3 -m json.tool
 
 # 5. Check mqwriter buffer metrics
 curl -s http://localhost:8084/metrics/buffer
@@ -227,7 +227,8 @@ make run-apigw   # http://localhost:8080
 
 ```bash
 curl http://localhost:8080/api/v1/gpus
-# {"gpus":[{"id":"GPU-0a1b2c3d"},{"id":"GPU-5e6f7a8b"},{"id":"GPU-c9d0e1f2"}]}
+# {"gpus":[{"id":"GPU-5fd4f087-..."},{"id":"GPU-62120fe8-..."},...]}
+
 ```
 
 **`GET /api/v1/gpus/{id}/telemetry`** — telemetry entries for a GPU, ordered by timestamp ascending.
@@ -235,7 +236,7 @@ curl http://localhost:8080/api/v1/gpus
 Optional query params `start_time` and `end_time` (RFC3339, inclusive):
 
 ```bash
-curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
+curl 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
 ```
 
 ### Swagger UI
@@ -308,15 +309,54 @@ Persisted GPU telemetry entries written by the collector.
 
 ## Kubernetes Deployment (Helm)
 
-The entire pipeline can be deployed to any Kubernetes cluster using the `telemetry-pipeline` umbrella Helm chart. It installs all five services plus a Bitnami PostgreSQL-HA cluster.
+The entire pipeline can be deployed to any Kubernetes cluster using the `telemetry-pipeline` umbrella Helm chart. It installs all five services plus Bitnami PostgreSQL.
 
 ### Prerequisites
 
 - Kubernetes cluster (Minikube, kind, EKS, GKE, etc.)
 - [Helm 3](https://helm.sh/docs/intro/install/)
+- [golang-migrate CLI](https://github.com/golang-migrate/migrate/tree/master/cmd/migrate)
 - Docker images built and available to the cluster
 
-### Build images (Minikube example)
+### Quick Reference (copy-paste)
+
+From a fresh clone to a running cluster:
+
+```bash
+# 1. Clone and enter repo
+git clone <repo-url>
+cd prompted
+
+# 2. Point Docker at Minikube's daemon
+eval $(minikube docker-env)
+
+# 3. Build all service images
+make docker-build
+
+# 4. Pull Helm dependencies and install
+cd deploy/helm/telemetry-pipeline
+helm dependency update .
+helm install prompted .
+
+# 5. Wait for PostgreSQL to be ready
+kubectl get pods -w
+# (wait until prompted-postgresql-0 shows Running 1/1, then Ctrl+C)
+
+# 6. Run database migrations
+kubectl port-forward svc/prompted-postgresql 5432:5432 &
+cd ../../..
+make migrate-up
+
+# 7. Access the API
+kubectl port-forward svc/prompted-apigw 8080:8080 &
+curl http://localhost:8080/api/v1/gpus
+curl 'http://localhost:8080/api/v1/gpus/<gpu-uuid>/telemetry'
+open http://localhost:8080/swagger/index.html
+```
+
+### Step-by-step Details
+
+#### Build images (Minikube example)
 
 ```bash
 # Point Docker at Minikube's daemon
@@ -326,7 +366,7 @@ eval $(minikube docker-env)
 make docker-build
 ```
 
-### Install
+#### Install
 
 ```bash
 cd deploy/helm/telemetry-pipeline
@@ -338,23 +378,59 @@ helm dependency update .
 helm install prompted .
 ```
 
-### Verify
+#### Run Migrations
+
+PostgreSQL must be ready before running migrations:
+
+```bash
+kubectl port-forward svc/prompted-postgresql 5432:5432 &
+make migrate-up
+```
+
+#### Verify
 
 ```bash
 # Check all pods are running
 kubectl get pods
 
 # Port-forward the API gateway to localhost
-kubectl port-forward svc/prompted-apigw 8080:8080
+kubectl port-forward svc/prompted-apigw 8080:8080 &
 
-# In another terminal — list GPUs
+# List GPUs (returns GPU hardware UUIDs)
 curl http://localhost:8080/api/v1/gpus
 
-# Telemetry for a specific GPU
-curl 'http://localhost:8080/api/v1/gpus/GPU-0a1b2c3d/telemetry'
+# Telemetry for a specific GPU (use a UUID from the list above)
+curl 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry'
+
+# Telemetry with time window
+curl 'http://localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry?start_time=2026-01-01T00:00:00Z&end_time=2027-01-01T00:00:00Z'
 
 # Swagger UI
 open http://localhost:8080/swagger/index.html
+```
+
+### Upgrade after code/chart changes
+
+```bash
+# If Go code changed — rebuild the affected image(s)
+eval $(minikube docker-env)
+docker build --build-arg SERVICE=<service> -t prompted-<service> .
+
+# If Helm values/templates changed
+helm upgrade prompted deploy/helm/telemetry-pipeline
+
+# Force pod restart to pick up new image (tag is always "latest")
+kubectl rollout restart deployment -l app.kubernetes.io/name=<service>
+
+# If migrations changed
+kubectl port-forward svc/prompted-postgresql 5432:5432 &
+make migrate-up
+```
+
+### Uninstall
+
+```bash
+helm uninstall prompted
 ```
 
 ### Override values
@@ -372,12 +448,6 @@ helm install prompted . \
   --set mqwriter.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable" \
   --set mqreader.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable" \
   --set collector.secret.DATABASE_URL="postgres://prompted:my-secret-pw@prompted-postgresql:5432/prompted?sslmode=disable"
-```
-
-### Uninstall
-
-```bash
-helm uninstall prompted
 ```
 
 ### Helm Chart Structure
