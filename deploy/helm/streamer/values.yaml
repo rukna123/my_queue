@@ -22,7 +22,7 @@ config:
   PORT: "8082"
   MQ_BASE_URL: http://prompted-mqwriter:8084
   STREAMER_CSV_PATH: /data/telemetry.csv
-  STREAMER_INTERVAL_MS: "1000"
+  STREAMER_INTERVAL_MS: "0"
   STREAMER_CHANNEL_BUFFER: "16"
 
 # ---- CSV Data Source ----

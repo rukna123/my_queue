@@ -113,7 +113,7 @@ services:
       LOG_LEVEL: info
       MQ_BASE_URL: http://mqwriter:8084
       STREAMER_CSV_PATH: /data/telemetry.csv
-      STREAMER_INTERVAL_MS: "1000"
+      STREAMER_INTERVAL_MS: "0"
       STREAMER_CHANNEL_BUFFER: "16"
     volumes:
       - ./deploy/helm/streamer/files:/data
@@ -141,7 +141,7 @@ services:
       COLLECTOR_ID: collector-0
       LEASE_SECONDS: "30"
       LEASE_MAX: "100"
-      POLL_INTERVAL_MS: "1000"
+      POLL_INTERVAL_MS: "1"
 
   # ---------------------------------------------------------------------------
   # API Gateway  –  public REST API + Swagger UI

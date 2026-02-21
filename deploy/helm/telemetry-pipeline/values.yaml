@@ -68,20 +68,20 @@ partition-controller:
 
 # ---- Streamer ---------------------------------------------------------------
 streamer:
-  replicaCount: 1
+  replicaCount: 10
   config:
     LOG_LEVEL: info
     PORT: "8082"
     MQ_BASE_URL: http://prompted-mqwriter:8084
     STREAMER_CSV_PATH: /data/telemetry.csv
-    STREAMER_INTERVAL_MS: "1000"
+    STREAMER_INTERVAL_MS: "0"
     STREAMER_CHANNEL_BUFFER: "16"
   csv:
     enabled: false
 
 # ---- Collector --------------------------------------------------------------
 collector:
-  replicaCount: 1
+  replicaCount: 10
   config:
     LOG_LEVEL: info
     PORT: "8083"
@@ -89,7 +89,7 @@ collector:
     COLLECTOR_ID: collector-0
     LEASE_SECONDS: "30"
     LEASE_MAX: "100"
-    POLL_INTERVAL_MS: "1000"
+    POLL_INTERVAL_MS: "1"
   secret:
     DATABASE_URL: postgres://prompted:prompted@prompted-postgresql:5432/prompted?sslmode=disable
   autoscaling:
